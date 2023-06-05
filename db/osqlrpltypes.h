@@ -51,7 +51,8 @@ XMACRO_OSQL_RPL_TYPES( OSQL_INSIDX,            25, "OSQL_INSIDX" ) /* for indexe
 XMACRO_OSQL_RPL_TYPES( OSQL_DBQ_CONSUME_UUID,  26, "OSQL_DBQ_CONSUME_UUID" ) /* not in use */                                \
 XMACRO_OSQL_RPL_TYPES( OSQL_STARTGEN,          27, "OSQL_STARTGEN" )                                                         \
 XMACRO_OSQL_RPL_TYPES( OSQL_DONE_WITH_EFFECTS, 28, "OSQL_DONE_WITH_EFFECTS" )                                                \
-XMACRO_OSQL_RPL_TYPES( MAX_OSQL_TYPES,         29, "OSQL_MAX")
+XMACRO_OSQL_RPL_TYPES( OSQL_TIMESPEC,          29, "OSQL_TIMESPEC" )                                                         \
+XMACRO_OSQL_RPL_TYPES( MAX_OSQL_TYPES,         30, "OSQL_MAX")
 
 // clang-format on
 

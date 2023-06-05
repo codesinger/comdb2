@@ -84,10 +84,21 @@ struct fieldopt {
     } value;
 };
 
+enum pd_flags { PERIOD_SYSTEM = 0, PERIOD_BUSINESS = 1, PERIOD_MAX = 2 };
+
+extern struct period {
+    int enable;
+    int start;
+    int end;
+} periods[PERIOD_MAX];
+
+extern int nperiods;
+
 enum ct_flags {
     CT_UPD_CASCADE = 0x00000001,
     CT_DEL_CASCADE = 0x00000002,
-    CT_DEL_SETNULL = 0x00000008,
+    CT_DEL_SETNULL = 0x00000004,
+    CT_NO_OVERLAP = 0x00000008
 };
 
 enum ct_type { CT_FKEY, CT_CHECK };

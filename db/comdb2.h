@@ -417,7 +417,8 @@ enum DB_METADATA {
     META_QUEUE_ODH = -14,
     META_QUEUE_COMPRESS = -15,
     META_QUEUE_PERSISTENT_SEQ = -16,
-    META_QUEUE_SEQ = -17
+    META_QUEUE_SEQ = -17,
+    META_START_TIME = -18
 };
 
 enum CONSTRAINT_FLAGS {
@@ -425,6 +426,7 @@ enum CONSTRAINT_FLAGS {
     CT_DEL_CASCADE = 0x00000002,
     CT_BLD_SKIP    = 0x00000004,
     CT_DEL_SETNULL = 0x00000008,
+    CT_NO_OVERLAP = 0x0000000C,
 };
 
 /* dbtable type specifier, please do not use for schema change type */
@@ -663,6 +665,14 @@ typedef struct dbtable {
     unsigned aa_counter_upd;   // counter which includes updates
     unsigned aa_counter_noupd; // does not include updates
 
+    /* temporal periods */
+    struct timespec tstart;
+    int is_history_table;
+    period_t periods[PERIOD_MAX];
+    struct dbtable *history_db;
+    struct dbtable *orig_db;
+    int overwrite_systime;
+
     /* Foreign key constraints */
     constraint_t *constraints;
     size_t n_constraints;
@@ -670,6 +680,7 @@ typedef struct dbtable {
     constraint_t **rev_constraints;
     size_t n_rev_constraints;
     size_t cap_rev_constraints;
+    size_t n_rev_cascade_systime;
     pthread_mutex_t rev_constraints_lk;
 
     /* CHECK constraints */
@@ -1369,6 +1380,9 @@ struct ireq {
 
     /* osql prefault step index */
     int *osql_step_ix;
+
+    /* temporal table */
+    struct timespec tstart;
 
     tran_type *sc_logical_tran;
     tran_type *sc_tran;
@@ -2168,6 +2182,11 @@ int ix_prev(struct ireq *iq, int ixnum, void *key, int keylen, void *last,
             int lastrrn, unsigned long long lastgenid, void *fndkey,
             int *fndrrn, unsigned long long *genid, void *fnddta, int *fndlen,
             int maxlen, unsigned long long context);
+int ix_prev_trans(struct ireq *iq, void *trans, int ixnum, void *key,
+                  int keylen, void *last, int lastrrn,
+                  unsigned long long lastgenid, void *fndkey, int *fndrrn,
+                  unsigned long long *genid, void *fnddta, int *fndlen,
+                  int maxlen, unsigned long long context);
 int ix_prev_nl_ser(struct ireq *iq, int ixnum, void *key, int keylen,
                    void *last, int lastrrn, unsigned long long lastgenid,
                    void *fndkey, int *fndrrn, unsigned long long *genid,
@@ -2430,6 +2449,8 @@ int put_db_instant_schema_change(struct dbtable *db, tran_type *tran, int isc);
 int get_db_instant_schema_change(struct dbtable *db, int *isc);
 int get_db_instant_schema_change_tran(struct dbtable *, int *isc, tran_type *tran);
 
+int put_db_start_time(struct dbtable *db, tran_type *tran);
+int get_db_start_time(struct dbtable *db, struct timespec *ts, tran_type *tran);
 int set_meta_odh_flags(struct dbtable *db, int odh, int compress, int compress_blobs,
                        int ipupates);
 int set_meta_odh_flags_tran(struct dbtable *db, tran_type *tran, int odh,
@@ -2724,7 +2745,7 @@ enum {
     RECFLAGS_NO_CONSTRAINTS = 1 << 1,
     /* if the schema is not dynamic then bzero the nulls map */
     RECFLAGS_DYNSCHEMA_NULLS_ONLY = 1 << 2,
-    /* called from update cascade code, affects key operations */
+    /* called from update/delete cascade code, affects key operations */
     RECFLAGS_UPD_CASCADE = 1 << 3,
     /* use .NEW..ONDISK rather than .ONDISK */
     RECFLAGS_NEW_SCHEMA = 1 << 4,

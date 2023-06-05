@@ -213,7 +213,7 @@ static int bdb_fetch_blobs_by_rrn_and_genid_int_int(
                     if (rc) {
                         bdb_get_error(bdb_state, tran ? tran->tid : NULL, rc,
                                       BDBERR_MISC, bdberr, __func__);
-                        logmsg(LOGMSG_ERROR, 
+                        logmsg(LOGMSG_ERROR,
                                 "^%s: failed to get a cursor bdberr=%d\n",
                                 __func__, *bdberr);
                         return -1;
@@ -223,7 +223,7 @@ static int bdb_fetch_blobs_by_rrn_and_genid_int_int(
                                                              dbp, 0, bdberr);
                     rc = (dbcp_t == 0);
                     if (rc) {
-                        logmsg(LOGMSG_ERROR, 
+                        logmsg(LOGMSG_ERROR,
                                 "^%s: failed to get a cursor bdberr=%d\n",
                                 __func__, *bdberr);
                         return -1;
@@ -343,7 +343,7 @@ static int bdb_fetch_blobs_by_rrn_and_genid_int_int(
                     if (rc) {
                         bdb_get_error(bdb_state, tran ? tran->tid : NULL, rc,
                                       BDBERR_MISC, bdberr, __func__);
-                        logmsg(LOGMSG_ERROR, 
+                        logmsg(LOGMSG_ERROR,
                                 "^%s: failed to get a cursor bdberr=%d\n",
                                 __func__, *bdberr);
                         return -1;
@@ -355,7 +355,7 @@ static int bdb_fetch_blobs_by_rrn_and_genid_int_int(
                                                            0, bdberr);
                     rc = (dbcp == 0);
                     if (rc) {
-                        logmsg(LOGMSG_ERROR, 
+                        logmsg(LOGMSG_ERROR,
                                 "^%s: failed to get a cursor bdberr=%d\n",
                                 __func__, *bdberr);
                         return -1;
@@ -704,7 +704,7 @@ static int bdb_fetch_int_ll(
                 dtafile = get_dtafile_from_genid(*(unsigned long long *)ix);
 
                 if (dtafile < 0 || dtafile >= bdb_state->attr->dtastripe) {
-                    logmsg(LOGMSG_ERROR, 
+                    logmsg(LOGMSG_ERROR,
                             "%s: dtafile=%d out of range genid %016llx\n",
                             __func__, dtafile, *(unsigned long long *)ix);
                     *bdberr = BDBERR_BADARGS;
@@ -763,7 +763,7 @@ static int bdb_fetch_int_ll(
              * and not let someone try to move around with that cursor */
             unsigned long long zero_genid = 0;
             if (memcmp(lastix, &zero_genid, sizeof(zero_genid)) == 0) {
-                logmsg(LOGMSG_ERROR, 
+                logmsg(LOGMSG_ERROR,
                         "%s: unset lastix, possibly trying to move "
                         "to next after doing a direct lookup on a genid?\n",
                         __func__);
@@ -3279,7 +3279,7 @@ int bdb_fetch_next_genid_tran(bdb_state_type *bdb_state, void *ix, int ixnum,
 
     *bdberr = BDBERR_NOERROR;
 
-    BDB_READLOCK("bdb_fetch_next_genid");
+    BDB_READLOCK("bdb_fetch_next_genid_tran");
 
     outrc =
         bdb_fetch_int(1,              /* return data */
@@ -3440,6 +3440,34 @@ int bdb_fetch_prev_genid(bdb_state_type *bdb_state, void *ix, int ixnum,
     return outrc;
 }
 
+int bdb_fetch_prev_genid_tran(bdb_state_type *bdb_state, void *ix, int ixnum,
+                              int ixlen, void *lastix, int lastrrn,
+                              unsigned long long lastgenid, void *dta,
+                              int dtalen, int *reqdtalen, void *ixfound,
+                              int *rrn, unsigned long long *genid, void *tran,
+                              bdb_fetch_args_t *args, int *bdberr)
+{
+    int outrc;
+
+    *bdberr = BDBERR_NOERROR;
+
+    BDB_READLOCK("bdb_fetch_prev_genid_tran");
+
+    outrc =
+        bdb_fetch_int(1,              /* return data */
+                      FETCH_INT_PREV, /* prev */
+                      1,              /* lookahead */
+                      bdb_state, ix, ixnum, ixlen, lastix, lastrrn, lastgenid,
+                      dta, dtalen, reqdtalen, ixfound, rrn, NULL, /* recnum */
+                      genid, 0, NULL, NULL, NULL, NULL,           /* no blobs */
+                      0, tran, NULL, /* no cur_ser */
+                      args, bdberr);
+
+    BDB_RELLOCK();
+
+    return outrc;
+}
+
 int bdb_fetch_prev_genid_nl_ser(bdb_state_type *bdb_state, void *ix, int ixnum,
                                 int ixlen, void *lastix, int lastrrn,
                                 unsigned long long lastgenid, void *dta,
@@ -3519,6 +3547,34 @@ int bdb_fetch_prev_nodta_genid(bdb_state_type *bdb_state, void *ix, int ixnum,
                           genid, 0, NULL, NULL, NULL, NULL, /* no blobs */
                           0, NULL,                          /* no txn */
                           NULL,                             /* no cur_ser */
+                          args, bdberr);
+
+    BDB_RELLOCK();
+
+    return outrc;
+}
+
+int bdb_fetch_prev_nodta_genid_tran(bdb_state_type *bdb_state, void *ix,
+                                    int ixnum, int ixlen, void *lastix,
+                                    int lastrrn, unsigned long long lastgenid,
+                                    void *ixfound, int *rrn,
+                                    unsigned long long *genid, void *tran,
+                                    bdb_fetch_args_t *args, int *bdberr)
+{
+    int outrc;
+
+    *bdberr = BDBERR_NOERROR;
+
+    BDB_READLOCK("bdb_fetch_prev_nodta_genid_tran");
+
+    outrc = bdb_fetch_int(0,              /* return no data */
+                          FETCH_INT_PREV, /* prev */
+                          1,              /* lookahead */
+                          bdb_state, ix, ixnum, ixlen, lastix, lastrrn,
+                          lastgenid, NULL, 0, NULL, /* dta, dtalen, reqdtalen */
+                          ixfound, rrn, NULL,       /* recnum */
+                          genid, 0, NULL, NULL, NULL, NULL, /* no blobs */
+                          0, tran, NULL,                    /* no cur_ser */
                           args, bdberr);
 
     BDB_RELLOCK();

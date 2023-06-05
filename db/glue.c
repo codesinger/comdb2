@@ -2385,20 +2385,13 @@ retry:
                     fnddta, maxlen, fndlen, fndkey, fndrrn, genid, numblobs,
                     blobns, blobsizes, bloboffs, blobptrs, args, &bdberr);
                 iq->gluewhere = "bdb_fetch_next_blobs_genid done";
-            } else if (trans) {
-                iq->gluewhere = req = "bdb_fetch_next_genid";
+            } else {
+                iq->gluewhere = req = "bdb_fetch_next_genid_tran";
                 ixrc = bdb_fetch_next_genid_tran(
                     bdb_handle, key, ixnum, keylen, curlast, lastrrn, lastgenid,
                     fnddta, maxlen, fndlen, fndkey, fndrrn, genid, trans, args,
                     &bdberr);
-                iq->gluewhere = "bdb_fetch_next_genid done";
-            } else {
-                iq->gluewhere = req = "bdb_fetch_next_genid";
-                ixrc = bdb_fetch_next_genid(bdb_handle, key, ixnum, keylen,
-                                            curlast, lastrrn, lastgenid, fnddta,
-                                            maxlen, fndlen, fndkey, fndrrn,
-                                            genid, args, &bdberr);
-                iq->gluewhere = "bdb_fetch_next_genid done";
+                iq->gluewhere = "bdb_fetch_next_genid_tran done";
             }
         } else if (cur_ser) {
             iq->gluewhere = req = "bdb_fetch_next_genid_nl_ser";
@@ -2422,11 +2415,11 @@ retry:
             fndrrn, genid, cur_ser, args, &bdberr);
         iq->gluewhere = "bdb_fetch_next_nodta_genid_nl_ser done";
     } else {
-        iq->gluewhere = req = "bdb_fetch_next_nodta_genid";
+        iq->gluewhere = req = "bdb_fetch_next_nodta_genid_tran";
         ixrc = bdb_fetch_next_nodta_genid_tran(
             bdb_handle, key, ixnum, keylen, curlast, lastrrn, lastgenid, fndkey,
             fndrrn, genid, trans, args, &bdberr);
-        iq->gluewhere = "bdb_fetch_next_nodta_genid done";
+        iq->gluewhere = "bdb_fetch_next_nodta_genid_tran done";
     }
     if (ixrc == -1) {
         if (bdberr == BDBERR_DEADLOCK) {
@@ -2598,7 +2591,7 @@ static int ix_prev_int(int auxdb, int lookahead, struct ireq *iq, int ixnum,
                        unsigned long long *genid, void *fnddta, int *fndlen,
                        int maxlen, int numblobs, int *blobnums,
                        size_t *blobsizes, size_t *bloboffs, void **blobptrs,
-                       int *retries, unsigned long long context,
+                       int *retries, unsigned long long context, void *trans,
                        bdb_cursor_ser_t *cur_ser)
 {
     char *req;
@@ -2637,12 +2630,12 @@ retry:
                     blobns, blobsizes, bloboffs, blobptrs, &args, &bdberr);
                 iq->gluewhere = "bdb_fetch_prev_blobs_genid done";
             } else {
-                iq->gluewhere = req = "bdb_fetch_prev_genid";
-                ixrc = bdb_fetch_prev_genid(bdb_handle, key, ixnum, keylen,
-                                            curlast, lastrrn, lastgenid, fnddta,
-                                            maxlen, fndlen, fndkey, fndrrn,
-                                            genid, &args, &bdberr);
-                iq->gluewhere = "bdb_fetch_prev_genid done";
+                iq->gluewhere = req = "bdb_fetch_prev_genid_tran";
+                ixrc = bdb_fetch_prev_genid_tran(
+                    bdb_handle, key, ixnum, keylen, curlast, lastrrn, lastgenid,
+                    fnddta, maxlen, fndlen, fndkey, fndrrn, genid, trans, &args,
+                    &bdberr);
+                iq->gluewhere = "bdb_fetch_prev_genid_tran done";
             }
         } else if (cur_ser) {
             iq->gluewhere = req = "bdb_fetch_prev_genid_nl_ser";
@@ -2666,14 +2659,16 @@ retry:
             fndrrn, genid, cur_ser, &args, &bdberr);
         iq->gluewhere = "bdb_fetch_prev_nodta_genid_nl_ser done";
     } else {
-        iq->gluewhere = req = "bdb_fetch_prev_nodta_genid";
-        ixrc = bdb_fetch_prev_nodta_genid(bdb_handle, key, ixnum, keylen,
-                                          curlast, lastrrn, lastgenid, fndkey,
-                                          fndrrn, genid, &args, &bdberr);
-        iq->gluewhere = "bdb_fetch_prev_nodta_genid done";
+        iq->gluewhere = req = "bdb_fetch_prev_nodta_genid_tran";
+        ixrc = bdb_fetch_prev_nodta_genid_tran(
+            bdb_handle, key, ixnum, keylen, curlast, lastrrn, lastgenid, fndkey,
+            fndrrn, genid, trans, &args, &bdberr);
+        iq->gluewhere = "bdb_fetch_prev_nodta_genid_tran done";
     }
     if (ixrc == -1) {
         if (bdberr == BDBERR_DEADLOCK) {
+            if (trans) return RC_INTERNAL_RETRY;
+
             iq->retries++;
             if (++(*retries) < gbl_maxretries) {
                 n_retries++;
@@ -2752,7 +2747,7 @@ int ix_prev_blobs_auxdb(int auxdb, int lookahead, struct ireq *iq, int ixnum,
     return ix_prev_int(auxdb, lookahead, iq, ixnum, key, keylen, last, lastrrn,
                        lastgenid, fndkey, fndrrn, genid, fnddta, fndlen, maxlen,
                        numblobs, blobnums, blobsizes, bloboffs, blobptrs,
-                       retries, context, NULL);
+                       retries, context, NULL, NULL);
 }
 
 int ix_prev(struct ireq *iq, int ixnum, void *key, int keylen, void *last,
@@ -2760,9 +2755,9 @@ int ix_prev(struct ireq *iq, int ixnum, void *key, int keylen, void *last,
             int *fndrrn, unsigned long long *genid, void *fnddta, int *fndlen,
             int maxlen, unsigned long long context)
 {
-    return ix_prev_auxdb(AUXDB_NONE, 1, iq, ixnum, key, keylen, last, lastrrn,
-                         lastgenid, fndkey, fndrrn, genid, fnddta, fndlen,
-                         maxlen, context);
+    return ix_prev_int(AUXDB_NONE, 1, iq, ixnum, key, keylen, last, lastrrn,
+                       lastgenid, fndkey, fndrrn, genid, fnddta, fndlen, maxlen,
+                       0, NULL, NULL, NULL, NULL, NULL, context, NULL, NULL);
 }
 
 int ix_prev_nl_ser(struct ireq *iq, int ixnum, void *key, int keylen,
@@ -2773,7 +2768,7 @@ int ix_prev_nl_ser(struct ireq *iq, int ixnum, void *key, int keylen,
 {
     return ix_prev_int(AUXDB_NONE, 0, iq, ixnum, key, keylen, last, lastrrn,
                        lastgenid, fndkey, fndrrn, genid, fnddta, fndlen, maxlen,
-                       0, NULL, NULL, NULL, NULL, NULL, context, cur_ser);
+                       0, NULL, NULL, NULL, NULL, NULL, context, NULL, cur_ser);
 }
 
 int ix_prev_nl(struct ireq *iq, int ixnum, void *key, int keylen, void *last,
@@ -2784,6 +2779,17 @@ int ix_prev_nl(struct ireq *iq, int ixnum, void *key, int keylen, void *last,
     return ix_prev_auxdb(AUXDB_NONE, 0, iq, ixnum, key, keylen, last, lastrrn,
                          lastgenid, fndkey, fndrrn, genid, fnddta, fndlen,
                          maxlen, context);
+}
+
+int ix_prev_trans(struct ireq *iq, void *trans, int ixnum, void *key,
+                  int keylen, void *last, int lastrrn,
+                  unsigned long long lastgenid, void *fndkey, int *fndrrn,
+                  unsigned long long *genid, void *fnddta, int *fndlen,
+                  int maxlen, unsigned long long context)
+{
+    return ix_prev_int(AUXDB_NONE, 1, iq, ixnum, key, keylen, last, lastrrn,
+                       lastgenid, fndkey, fndrrn, genid, fnddta, fndlen, maxlen,
+                       0, NULL, NULL, NULL, NULL, NULL, context, trans, NULL);
 }
 
 int ix_prev_rnum(struct ireq *iq, int ixnum, void *key, int keylen, void *last,
@@ -3648,7 +3654,7 @@ int open_bdb_env(struct dbenv *dbenv)
     bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_SYNCMODE,
                      syncmode_callback);
 #if 0
-    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_CATCHUP, 
+    bdb_callback_set(dbenv->bdb_callback, BDB_CALLBACK_CATCHUP,
             catchup_callback);
 #endif
 
@@ -3702,7 +3708,7 @@ int open_bdb_env(struct dbenv *dbenv)
                 dbenv->handle_sibling, intern(dbenv->sibling_hostname[ii]),
                 dbenv->sibling_port[ii][NET_REPLICATION]);
             if (rcv == 0) {
-                logmsg(LOGMSG_ERROR, 
+                logmsg(LOGMSG_ERROR,
                         "open_bdb_env:failed add_to_netinfo host %s port %d\n",
                         dbenv->sibling_hostname[ii],
                         dbenv->sibling_port[ii][NET_REPLICATION]);
@@ -3897,7 +3903,7 @@ static void get_disable_skipscan(struct dbtable *tbl, tran_type *tran)
 }
 
 
-void get_disable_skipscan_all() 
+void get_disable_skipscan_all()
 {
 #ifdef DEBUGSKIPSCAN
     logmsg(LOGMSG_WARN, "get_disable_skipscan_all() called\n");
@@ -3909,7 +3915,7 @@ void get_disable_skipscan_all()
     }
     curtran_puttran(tran);
 }
- 
+
 
 
 /* open the db files, etc */
@@ -3958,6 +3964,24 @@ int backend_open_tran(struct dbenv *dbenv, tran_type *tran, uint32_t flags)
                    dbenv->basedir, db->tablename, bdberr);
 
             return -1;
+        }
+
+        if (db->periods[PERIOD_SYSTEM].enable) {
+            char tmpname[MAXTABLELEN];
+            struct dbtable *history_db = NULL;
+            snprintf(tmpname, sizeof(tmpname), "%s_history", db->tablename);
+            history_db = get_dbtable_by_name(tmpname);
+            if (!history_db) {
+                logmsg(LOGMSG_ERROR, "%s: failed to locate history table %s\n",
+                       __func__, tmpname);
+                return -1;
+            }
+            db->history_db = history_db;
+            history_db->is_history_table = 1;
+            history_db->orig_db = db;
+            logmsg(LOGMSG_INFO,
+                   "'%s' is temporal table and history table is '%s'\n",
+                   db->tablename, history_db->tablename);
         }
     }
     /* open queues */
@@ -4061,6 +4085,11 @@ int backend_open_tran(struct dbenv *dbenv, tran_type *tran, uint32_t flags)
                 logmsg(LOGMSG_ERROR, "save odh to llmeta failed\n");
                 return -1;
             }
+            if ((tbl->periods[PERIOD_SYSTEM].enable || tbl->is_history_table) &&
+                put_db_start_time(tbl, NULL)) {
+                logmsg(LOGMSG_ERROR, "failed to put db start time\n");
+                return -1;
+            }
             if (gbl_init_with_bthash &&
                 put_db_bthash(tbl, NULL, gbl_init_with_bthash) != 0) {
                 logmsg(LOGMSG_ERROR, "save bthash size to llmeta failed\n");
@@ -4073,6 +4102,7 @@ int backend_open_tran(struct dbenv *dbenv, tran_type *tran, uint32_t flags)
                 logmsg(LOGMSG_ERROR, "fetch odh from llmeta failed\n");
                 return -1;
             }
+            get_db_start_time(tbl, &tbl->tstart, NULL);
 
             if (get_db_bthash_tran(tbl, &bthashsz, tran) != 0) {
                 bthashsz = 0;
@@ -4590,6 +4620,37 @@ static int put_meta_int(const char *table, void *tran, int rrn, int key,
         return -1;
     }
     return meta_put(db, tran, &hdr, &value, sizeof(int));
+}
+
+int put_db_start_time(struct dbtable *db, tran_type *tran)
+{
+    struct metahdr hdr;
+    int rc;
+    struct timespec *ts;
+    hdr.rrn = META_START_TIME;
+    hdr.attr = 0;
+
+    ts = alloca(sizeof(struct timespec));
+    clock_gettime(CLOCK_REALTIME, ts);
+    memcpy(&db->tstart, ts, sizeof(struct timespec));
+
+    ts->tv_sec = flibc_htonll(ts->tv_sec);
+    ts->tv_nsec = flibc_htonll(ts->tv_nsec);
+
+    rc = meta_put(db, tran, &hdr, (void *)ts, sizeof(struct timespec));
+    return rc;
+}
+
+int get_db_start_time(struct dbtable *db, struct timespec *ts, tran_type *tran)
+{
+    struct metahdr hdr;
+    int rc;
+    hdr.rrn = META_START_TIME;
+    hdr.attr = 0;
+    rc = meta_get_tran(tran, db, &hdr, (void *)ts, sizeof(struct timespec));
+    ts->tv_sec = flibc_ntohll(ts->tv_sec);
+    ts->tv_nsec = flibc_ntohll(ts->tv_nsec);
+    return rc;
 }
 
 // clang-format on
@@ -6023,7 +6084,7 @@ int table_version_upsert(struct dbtable *db, void *trans, int *bdberr)
     int rc = bdb_table_version_upsert(db->handle, trans, bdberr);
     if(rc) return rc;
 
-    //select needs to be done with the same transaction to avoid 
+    //select needs to be done with the same transaction to avoid
     //undetectable deadlock for writing and reading from same thread
     unsigned long long version;
     rc = bdb_table_version_select(db->tablename, trans, &version, bdberr);
