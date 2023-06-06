@@ -2,17 +2,17 @@
 
 /*
    Copyright 2015 Bloomberg Finance L.P.
-  
+
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
    You may obtain a copy of the License at
-   
+
        http://www.apache.org/licenses/LICENSE-2.0
-   
+
    Unless required by applicable law or agreed to in writing, software
    distributed under the License is distributed on an "AS IS" BASIS,
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and 
+   See the License for the specific language governing permissions and
    limitations under the License.
  */
 
@@ -32,7 +32,7 @@ int    charidx=0;
 
 #define YY_ALWAYS_INTERACTIVE 1
 
-/* This doesn't work on LINUX, and isatty will always return a 0 if comdb2 is 
+/* This doesn't work on LINUX, and isatty will always return a 0 if comdb2 is
    invoked from comdb2ar.tsk.  So we're continuing down this slippery slope.  */
 int macc_isatty(int fd);
 #define isatty(fd) macc_isatty(fd)
@@ -62,7 +62,7 @@ extern char *csc2_strdup(char*);
 extern void csc2_error(const char *fmt, ...);
 void csc2_syntax_error(const char *fmt, ...);
 
-/* Now we're piling on more hacks to support this "yyin is really a file 
+/* Now we're piling on more hacks to support this "yyin is really a file
  * descriptor nonsense, god help us all */
 extern int macc_ferror(FILE *fh);
 #define ferror(fh) macc_ferror(fh)
@@ -113,7 +113,7 @@ nonclosingbrkt [^}]*
 				     if ( c == '*' )
 				     {
 				       while ( (c = input()) == '*' ) ; /* eat up '*' character */
-				       
+
 				       if ( c == '/' )
 				         break;    /* found the end */
                                      }
@@ -126,7 +126,7 @@ nonclosingbrkt [^}]*
 				   }
                                 }
 
-<RECTYPE>{sqlhexstr}            { 
+<RECTYPE>{sqlhexstr}            {
                                   char * data=NULL;
                                   int i=0, slen=0, j=sizeof(int);
                                   char   bdata[3];
@@ -136,14 +136,14 @@ nonclosingbrkt [^}]*
                                       yyerror("bad hex string");
                                       return 0;
                                    }
-                                  
+
                                   while (*data=='\''||isspace(*data)) data++;
 
                                   slen=strlen(data);
-              
+
                                   /* clear out the last (') */
 
-                                  for (i=slen-1;data[i]=='\''||isspace(data[i]);i--) 
+                                  for (i=slen-1;data[i]=='\''||isspace(data[i]);i--)
 				       {  data[i]=0; }
 
                                   /* get new length again */
@@ -153,7 +153,7 @@ nonclosingbrkt [^}]*
                                      /* hex data has bad length..must be divisible by 2 (each byte) */
                                      yyerror("hex string has bad length");
                                      return 0;
-                                  } 
+                                  }
                                   yylval.bytestr=(char*)csc2_malloc((slen+1)/2+sizeof(int));
                                   if (yylval.bytestr==NULL)
                                   {
@@ -193,8 +193,8 @@ nonclosingbrkt [^}]*
 				  /*fprintf(stderr, "malloc bytestr %x %d\n", yylval.bytestr,j);
                                   fsnapf(stderr, yylval.bytestr+sizeof(int), j); */
 				  memcpy(&yylval.bytestr[0], &j, sizeof(int));
-                                  return T_SQLHEXSTR; 
-                                }        
+                                  return T_SQLHEXSTR;
+                                }
 
 <INITIAL,CONSTRAINTS,RECTYPE>\n			{ current_line++; }
 
@@ -258,6 +258,7 @@ nonclosingbrkt [^}]*
                                   } }
 <RECTYPE>default                { return T_DEFAULT; }
 <RECTYPE>ondisk                 { return T_ONDISK; }
+<INITIAL>periods			    { return T_PERIODS; }
 <INITIAL>constraints            { BEGIN CONSTRAINTS; return T_CONSTRAINTS; }
 <INITIAL,CONSTRAINTS,RECTYPE>{where} { char *p = yytext;
                                 char *end= NULL;
@@ -303,21 +304,22 @@ nonclosingbrkt [^}]*
 <CONSTRAINTS>on                 { return T_CON_ON; }
 <CONSTRAINTS>update             { return T_CON_UPDATE; }
 <CONSTRAINTS>delete             { return T_CON_DELETE; }
+<CONSTRAINTS>"no_overlap"       { return T_CON_NOOVERLAP; }
 <CONSTRAINTS>set                { return T_SET; }
 <CONSTRAINTS>null               { return T_NULL; }
 <CONSTRAINTS>[\-:]              { return yytext[0];  }
 <CONSTRAINTS>{varname}          { yylval.varname=yytext; return T_VARNAME; }
 <CONSTRAINTS>=                  { return T_EQ; }
 <INITIAL,RECTYPE,CONSTRAINTS>[\{]                   { rectplvl++; return yytext[0]; }
-<INITIAL,RECTYPE,CONSTRAINTS>[\}]                   { 
-                                  rectplvl--; 
+<INITIAL,RECTYPE,CONSTRAINTS>[\}]                   {
+                                  rectplvl--;
                                   if (rectplvl<=0)
 				   {
 				      BEGIN 0;
 				      return yytext[0];
                                    }
 				  else
-				   return yytext[0]; 
+				   return yytext[0];
                                 }
 <RECTYPE>[\[\]_=]              { return yytext[0]; }
 <RECTYPE>.                      { BEGIN 0; unput( yytext[0] ); }

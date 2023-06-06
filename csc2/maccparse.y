@@ -1,16 +1,16 @@
 /*
    Copyright 2015 Bloomberg Finance L.P.
-  
+
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
    You may obtain a copy of the License at
-   
+
        http://www.apache.org/licenses/LICENSE-2.0
-   
+
    Unless required by applicable law or agreed to in writing, software
    distributed under the License is distributed on an "AS IS" BASIS,
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and 
+   See the License for the specific language governing permissions and
    limitations under the License.
  */
 
@@ -35,8 +35,8 @@
 %token T_STRING T_NUM T_FLOAT T_SQLHEXSTR
 %token T_WHERE T_VARNAME T_COMMENT
 
-%token T_LOGICAL T_INTEGER2 T_INTEGER4 
-%token T_CSTR T_PSTR T_REAL4 T_REAL8 
+%token T_LOGICAL T_INTEGER2 T_INTEGER4
+%token T_CSTR T_PSTR T_REAL4 T_REAL8
 %token T_UCHAR T_UINTEGER2 T_UINTEGER4 T_ULONG T_LONGLONG T_ULONGLONG
 %token T_BLOB T_BLOB2 T_VUTF8
 %token T_DATETIME T_DATETIMEUS
@@ -46,7 +46,7 @@
 %token T_DECIMAL64
 %token T_DECIMAL128
 
-%token T_KEYS 
+%token T_KEYS
 %token T_CONSTANTS
 %token T_PUBLIC T_PRIVATE
 %token T_FLD_NULL T_FLD_STRDEFAULT T_FLD_LDDEFAULT T_FLD_NEXTSEQUENCE T_FLD_PADDING
@@ -54,19 +54,21 @@
 %token T_CONSTRAINTS T_CASCADE T_SET T_NULL
 %token T_CON_ON  T_CON_UPDATE T_CON_DELETE T_RESTRICT
 %token T_CHECK
+%token T_CON_NOOVERLAP
+%token T_PERIODS
 
 %token T_RECNUMS T_PRIMARY T_DATAKEY T_UNIQNULLS
 %token T_YES T_NO
 
 %token T_ASCEND T_DESCEND T_DUP					/*MODIFIERS*/
 
-%token T_LT T_GT 
+%token T_LT T_GT
 %token T_EQ
 
 %type <number> validctype validstrtype valididxstrtype
 %type <numstr> number
 %type <number> yesno
-%type <where> where 
+%type <where> where
 %type <varname> varname typename
 %type <opttext> string verbatim_string
 %type <comment> comment
@@ -106,7 +108,7 @@ void csc2_syntax_error(const char *fmt, ...);
 
 %%
 comdbg_csc:	structdef
-				{ 
+				{
 				  resolve_case_names();		/* when i'm all done, do this */
 				}
 
@@ -120,6 +122,7 @@ validstruct:	recstruct
             |	keystruct
             |   constantstruct
             |   constraintstruct
+            |   periodstruct
 			;
 
 
@@ -135,13 +138,15 @@ ctmodifiers:    T_CON_ON T_CON_UPDATE T_CASCADE ctmodifiers           { set_cons
                 | /* %empty */
                 ;
 
-cnstrtstart:    string '-' T_GT { start_constraint_list($1); }
-                | varname '-' T_GT { start_constraint_list($1); }
+cnstrtstart:    string '-' T_GT { start_constraint_list($1, 0); }
+                | varname '-' T_GT { start_constraint_list($1, 0); }
+                | T_CON_NOOVERLAP string '-' T_GT { start_constraint_list($2, 1); }
+                | T_CON_NOOVERLAP varname '-' T_GT { start_constraint_list($2, 1); }
                 ;
 
 /* Named constraint (introduced in r7) */
 cnstrtnamedstart: string T_EQ string '-' T_GT {
-                      start_constraint_list($3);
+                      start_constraint_list($3, 0);
                       set_constraint_name($1, CT_FKEY);
                   }
 
@@ -159,6 +164,7 @@ cnstrtdef:      cnstrtdef cnstrtstart cnstrtparentlist ctmodifiers { }
                 ;
 
 cnstrtparentlist: cnstrtparentlist T_LT string ':' string T_GT  {  add_constraint($3,$5); }
+                | cnstrtparentlist T_LT varname ':' varname T_GT  {  add_constraint($3,$5); }
                 | T_LT string ':' string T_GT  {  add_constraint($2,$4); }
                 | string ':' string {  add_constraint($1,$3); }
                 | varname ':' varname {  add_constraint($1,$3); }
@@ -177,7 +183,7 @@ cnstrtparent:   T_LT string ':' string T_GT  {  add_constraint($2,$4); }
 **                          SIZE3=879
 **                        }
 */
-constantstruct:	T_CONSTANTS comment '{' cnstdef '}' 
+constantstruct:	T_CONSTANTS comment '{' cnstdef '}'
 		;
 
 cnstdef: varname '=' number ',' comment cnstdef { add_constant($1, $3.number, 0);}
@@ -260,8 +266,8 @@ validctype:     T_INTEGER2    { $$=T_INTEGER2;}
                 | T_REAL4       { $$=T_REAL4;}
                 | T_REAL8       { $$=T_REAL8;}
                 | T_LOGICAL     { $$=T_LOGICAL;}
-                | T_ULONGLONG    { $$=T_ULONGLONG;} 
-                | T_LONGLONG    { $$=T_LONGLONG;} 
+                | T_ULONGLONG    { $$=T_ULONGLONG;}
+                | T_LONGLONG    { $$=T_LONGLONG;}
                 | T_DATETIME    { $$=T_DATETIME;}
                 | T_DATETIMEUS  { $$=T_DATETIMEUS;}
                 | T_INTERVALYM  { $$=T_INTERVALYM;}
@@ -285,19 +291,19 @@ valididxstrtype:    T_CSTR      { $$=T_CSTR;}
                     ;
 
 typedec:	validctype varname fieldopts comment
-                                                { 
+                                                {
 						  declaration=1;
-						  rec_c_add($1, -1, $2, $4 /*$5*/); 
+						  rec_c_add($1, -1, $2, $4 /*$5*/);
 						  reset_array();
 						  reset_fldopt();
 						}
-                | validstrtype varname carray fieldopts comment 
+                | validstrtype varname carray fieldopts comment
                                                 {
-						  declaration=1; 
+						  declaration=1;
                                                   rec_c_add($1, -1, $2, $5);
                                                   reset_array();
 						  reset_fldopt();
-                                                } 
+                                                }
                 ;
 
 
@@ -368,7 +374,7 @@ varname:	T_VARNAME
               exit(-1);
             }
             $$=yylval.varname;
-            } 
+            }
 		;
 
 string:		T_STRING
@@ -385,7 +391,7 @@ string:		T_STRING
 			}
                 ;
 
-comment:	T_COMMENT	
+comment:	T_COMMENT
 			{
 			remem_com=(char*)csc2_malloc(yyleng+1);
 			if (remem_com==0) {
@@ -400,6 +406,42 @@ comment:	T_COMMENT
 	| /* %empty */ {$$=blankchar;}
 		;
 
+/* periodstruct: defines temporals
+**	ie.
+**	periods {
+**		SYSTEM(sys_start, sys_end)
+**		BUSINESS(bus_start, bus_end)
+**	}
+*/
+
+periodstruct:	periodstart '{' multipddef '}'
+        |
+		;
+
+periodstart:    T_PERIODS { start_periods_list(); }
+        ;
+
+
+multipddef:	pddef multipddef
+		|   pddef
+		;
+
+pddef:  varname '(' varname ',' varname ')' comment
+        {
+            reset_array();
+            reset_range();
+            key_piece_clear();
+
+            key_setdup();
+            key_piece_add($3, 0);
+            key_piece_add($5, 0);
+            key_add_tag($1,0,0);
+            key_piece_clear();
+
+            add_period($1,$3,$5);
+        }
+    ;
+
 /* keystruct: defines a key
 **	ie.
 **	keys {
@@ -408,7 +450,7 @@ comment:	T_COMMENT
 **	}
 */
 
-keystruct:	T_KEYS '{' multikeydef '}' 
+keystruct:	T_KEYS '{' multikeydef '}'
 		;
 
 multikeydef:	keydef multikeydef
@@ -416,14 +458,24 @@ multikeydef:	keydef multikeydef
 		;
 
 keydef:		multikeyflags string '=' compoundkey where comment
-							{ 
+							{
 							key_add_tag($2,0,$5);
-							key_piece_clear(); 
+							key_piece_clear();
+							}
+		|	multikeyflags varname '=' compoundkey where comment
+							{	/* conditional key */
+							key_add_tag($2,0,$5);
+							key_piece_clear();
 							}
 		|	multikeyflags string '(' typename ')' '=' compoundkey where comment
 							{	/* conditional key */
-							key_add_tag($2,$4,$8); 
-							key_piece_clear(); 
+							key_add_tag($2,$4,$8);
+							key_piece_clear();
+							}
+		|	multikeyflags varname '(' typename ')' '=' compoundkey where comment
+							{	/* conditional key */
+							key_add_tag($2,$4,$8);
+							key_piece_clear();
 							}
 		;
 
@@ -475,39 +527,39 @@ compoundkey:	keypiece
 		|		keypiece '+' compoundkey
 		;
 
-keypiece:	varname	{ 
-                                                          key_piece_add($1, 0); 
-                                                          reset_array(); 
+keypiece:	varname	{
+                                                          key_piece_add($1, 0);
+                                                          reset_array();
                                                           reset_range();
                                                         }
-		|	T_ASCEND varname { 
-                                                          key_piece_add($2, 0); 
-                                                          reset_array(); 
+		|	T_ASCEND varname {
+                                                          key_piece_add($2, 0);
+                                                          reset_array();
                                                           reset_range();
 		                                        }
-		|	T_DESCEND varname { 
-		                                          key_piece_setdescend(); 
-							  key_piece_add($2, 0); 
+		|	T_DESCEND varname {
+		                                          key_piece_setdescend();
+							  key_piece_add($2, 0);
 							  reset_array();
 							  reset_range();
 							 }
 		|	exprtype string {
                 key_piece_add($2, 1);
                 reset_key_exprtype();
-                reset_array(); 
+                reset_array();
                 reset_range();
             }
 		|	T_ASCEND exprtype string {
                 key_piece_add($3, 1);
                 reset_key_exprtype();
-                reset_array(); 
+                reset_array();
                 reset_range();
             }
 		|	T_DESCEND exprtype string {
                 key_piece_setdescend();
                 key_piece_add($3, 1);
                 reset_key_exprtype();
-                reset_array(); 
+                reset_array();
                 reset_range();
             }
 		;
@@ -516,8 +568,8 @@ keypiece:	varname	{
 yesno:	T_YES		{ $$=1; }
 	|	T_NO		{ $$=0; }
 	;
- 
-typename:		T_VARNAME	{ 
+
+typename:		T_VARNAME	{
 							char *name = (char*)csc2_malloc(yyleng+1);
 							if (!name) {
 								logmsgperror("typename");

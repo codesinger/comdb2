@@ -86,13 +86,12 @@ struct fieldopt {
 
 enum pd_flags { PERIOD_SYSTEM = 0, PERIOD_BUSINESS = 1, PERIOD_MAX = 2 };
 
-extern struct period {
+struct period {
     int enable;
     int start;
     int end;
-} periods[PERIOD_MAX];
+};
 
-extern int nperiods;
 
 enum ct_flags {
     CT_UPD_CASCADE = 0x00000001,
@@ -200,6 +199,8 @@ enum INDEXFLAGS {
 };
 
 typedef struct macc_globals_t {
+    struct period periods[PERIOD_MAX];
+    int nperiods;
     struct constraint constraints[MAXCNSTRTS];
     struct check_constraint check_constraints[MAXCNSTRTS];
     struct symbol symb[MAX];
@@ -309,7 +310,9 @@ int numix();
 void resolve_case_names();
 void set_constraint_mod(int start, int op, int type);
 void set_constraint_name(char *name, enum ct_type type);
-void start_constraint_list(char *keyname);
+void start_constraint_list(char *keyname, int no_overlap);
+void start_periods_list(void);
+void add_period(char *name, char *start, char *end);
 void add_constraint(char *tbl, char *key);
 void add_check_constraint(char *expr);
 void add_constant(char *name, int value, short type);

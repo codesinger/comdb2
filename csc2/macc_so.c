@@ -140,7 +140,7 @@ int csc2_used_bools(void)
         return;                                                                \
     } while (0)
 
-void start_constraint_list(char *keyname)
+void start_constraint_list(char *keyname, int no_overlap)
 {
     ++macc_globals->nconstraints;
 
@@ -151,13 +151,19 @@ void start_constraint_list(char *keyname)
         return;
     }
     struct constraint *constraints = macc_globals->constraints;
-    constraints[macc_globals->nconstraints].flags = 0;
+    constraints[macc_globals->nconstraints].flags = no_overlap ? CT_NO_OVERLAP : 0;
     constraints[macc_globals->nconstraints].ncnstrts = 0;
     constraints[macc_globals->nconstraints].lclkey = keyname;
 }
 
 void set_constraint_mod(int start, int op, int type)
 {
+    if (macc_globals->constraints[macc_globals->nconstraints].flags & CT_NO_OVERLAP) {
+        csc2_syntax_error(
+            "Error: No cascading allowed on no overlap constraints");
+        any_errors++;
+        return;
+    }
     if (type == 0)
         return;
     if (op == 0)
@@ -172,6 +178,111 @@ void set_constraint_mod(int start, int op, int type)
         }
 
         macc_globals->constraints[macc_globals->nconstraints].flags |= CT_DEL_SETNULL;
+    }
+}
+
+int dyns_get_period(int period, int *start, int *end)
+{
+    if (macc_globals->nperiods <= 0) return 0;
+    if (period >= PERIOD_MAX) return -1;
+    if (!macc_globals->periods[period].enable) return 0;
+    *start = macc_globals->periods[period].start;
+    *end = macc_globals->periods[period].end;
+    return 0;
+}
+
+void start_periods_list(void)
+{
+    int i;
+    for (i = 0; i < PERIOD_MAX; i++) {
+        macc_globals->periods[i].enable = 0;
+        macc_globals->periods[i].start = -1;
+        macc_globals->periods[i].end = -1;
+    }
+}
+
+int getsymbol(char *tabletag, char *nm, int *tblidx);
+void add_period(char *name, char *start, char *end)
+{
+    int period_type = PERIOD_MAX;
+    int i, tidx = 0;
+    char *tag;
+    if (strcasecmp(name, "SYSTEM") == 0)
+        period_type = PERIOD_SYSTEM;
+    else if (strcasecmp(name, "BUSINESS") == 0)
+        period_type = PERIOD_BUSINESS;
+    if (period_type < PERIOD_MAX) {
+        if (macc_globals->periods[period_type].enable) {
+            csc2_error("Error at line %3d: DUPLICATE PERIOD: %s.\n",
+                       current_line, name);
+            csc2_syntax_error("Error at line %3d: DUPLICATE PERIOD: %s.",
+                              current_line, name);
+            any_errors++;
+            return;
+        }
+
+        strlower(start, strlen(start));
+        tag = ONDISKTAG;
+        i = getsymbol(tag, start, &tidx);
+        if (i == -1) {
+            tag = (macc_globals->ntables > 1) ? ONDISKTAG : DEFAULTTAG;
+            i = getsymbol(tag, start, &tidx);
+        }
+        if (i == -1) {
+            csc2_error("Error at line %3d: SYMBOL NOT FOUND: %s.\n",
+                       current_line, start);
+            csc2_syntax_error("Error at line %3d: SYMBOL NOT FOUND: %s.",
+                              current_line, start);
+            csc2_error("IF IN MULTI-TABLE MODE MAKE SURE %s TAG IS DEFINED\n",
+                       ONDISKTAG);
+            any_errors++;
+            return;
+        } else if (macc_globals->tables[tidx].sym[i].type != T_DATETIMEUS) {
+            csc2_error("Error at line %3d: BAD PERIOD START: %s\n",
+                       current_line, start);
+            csc2_syntax_error("Error at line %3d: BAD PERIOD START: %s",
+                              current_line, start);
+            any_errors++;
+            return;
+        } else {
+            macc_globals->periods[period_type].start = i;
+        }
+
+        strlower(end, strlen(end));
+        tag = ONDISKTAG;
+        i = getsymbol(tag, end, &tidx);
+        if (i == -1) {
+            tag = (macc_globals->ntables > 1) ? ONDISKTAG : DEFAULTTAG;
+            i = getsymbol(tag, end, &tidx);
+        }
+        if (i == -1) {
+            csc2_error("Error at line %3d: SYMBOL NOT FOUND: %s.\n",
+                       current_line, end);
+            csc2_syntax_error("Error at line %3d: SYMBOL NOT FOUND: %s.",
+                              current_line, end);
+            csc2_error("IF IN MULTI-TABLE MODE MAKE SURE %s TAG IS DEFINED\n",
+                       ONDISKTAG);
+            any_errors++;
+            return;
+        } else if (macc_globals->tables[tidx].sym[i].type != T_DATETIMEUS) {
+            csc2_error("Error at line %3d: BAD PERIOD END: %s\n", current_line,
+                       end);
+            csc2_syntax_error("Error at line %3d: BAD PERIOD END: %s",
+                              current_line, end);
+            any_errors++;
+            return;
+        } else {
+            macc_globals->periods[period_type].end = i;
+        }
+        macc_globals->periods[period_type].enable = 1;
+        macc_globals->nperiods++;
+    } else {
+        csc2_error("Error at line %3d: UNKNOWN PERIOD: %s.\n", current_line,
+                   name);
+        csc2_syntax_error("Error at line %3d: UNKNOWN PERIOD: %s.",
+                          current_line, name);
+        any_errors++;
+        return;
     }
 }
 
@@ -405,9 +516,9 @@ char * sqltypetxt(int t, int size)
         case T_DECIMAL64: return "decimal64";
         case T_DECIMAL128: return "decimal128";
 
-        case T_PSTR:  
+        case T_PSTR:
         case T_CSTR:
-        case T_FCHAR: 
+        case T_FCHAR:
         case T_VUTF8:
                            {
                                return "char";
@@ -454,7 +565,7 @@ int check_options() /* CHECK VALIDITY OF OPTIONS      */
                 break;
             }
             if (numdim(tables[jj].sym[ii].dim) > 0) {
-                fprintf(stderr, "Record \"%s\" has ARRAY fields. SQL does not "
+                csc2_error("Record \"%s\" has ARRAY fields. SQL does not "
                                 "support this currently.\n",
                         tables[jj].table_tag);
                 any_errors++;
@@ -3280,7 +3391,7 @@ int dyns_get_table_field_option(char *tag, int fidx, int option,
             *value_type = CLIENT_FUNCTION;
             *value_sz = len;
             return 0;
-        } 
+        }
         default:
             return -1;
         }
