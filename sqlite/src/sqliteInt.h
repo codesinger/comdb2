@@ -43,10 +43,10 @@
 **
 **    PREVENTS-HARMLESS-OVERREAD  - This branch prevents a buffer overread
 **                                  that would be harmless and undetectable
-**                                  if it did occur.  
+**                                  if it did occur.
 **
 ** In all cases, the special comment must be enclosed in the usual
-** slash-asterisk...asterisk-slash comment marks, with no spaces between the 
+** slash-asterisk...asterisk-slash comment marks, with no spaces between the
 ** asterisks and the comment text.
 */
 
@@ -677,7 +677,7 @@
 #endif
 
 /*
-** The compile-time options SQLITE_MMAP_READWRITE and 
+** The compile-time options SQLITE_MMAP_READWRITE and
 ** SQLITE_ENABLE_BATCH_ATOMIC_WRITE are not compatible with one another.
 ** You must choose one or the other (or neither) but not both.
 */
@@ -1161,6 +1161,7 @@ typedef struct Cdb2TrigEvent Cdb2TrigEvent;
 typedef struct Cdb2TrigEvents Cdb2TrigEvents;
 typedef struct Cdb2TrigTables Cdb2TrigTables;
 typedef struct comdb2_ddl_context Cdb2DDL;
+typedef struct Temporal Temporal;
 #endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 
 
@@ -1271,7 +1272,7 @@ struct Db {
   int class;           /* what class for this cluster */
   int class_override;  /* was class explicit at the discovery time */
   int local;           /* is this a local db */
-  int version;         /* which protocol it supports */ 
+  int version;         /* which protocol it supports */
 #endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 };
 
@@ -1805,7 +1806,7 @@ struct FuncDestructor {
 **   PURE_DATE(zName, nArg, iArg, bNC, xFunc)
 **     Used for "pure" date/time functions, this macro is like DFUNCTION
 **     except that it does set the SQLITE_FUNC_CONSTANT flags.  iArg is
-**     ignored and the user-data for these functions is set to an 
+**     ignored and the user-data for these functions is set to an
 **     arbitrary non-NULL pointer.  The bNC parameter is not used.
 **
 **   AGGREGATE(zName, nArg, iArg, bNC, xStep, xFinal)
@@ -1910,6 +1911,7 @@ struct Column {
   char affinity;   /* One of the SQLITE_AFF_... values */
   u8 szEst;        /* Estimated size of value in this column. sizeof(INT)==1 */
   u8 colFlags;     /* Boolean properties.  See COLFLAG_ defines below */
+  u8 colTime;      /* Boolean properties.  See COLTIME_ defines below */
 };
 
 /* Allowed values for Column.colFlags:
@@ -1919,6 +1921,13 @@ struct Column {
 #define COLFLAG_HASTYPE  0x0004    /* Type name follows column name */
 #define COLFLAG_UNIQUE   0x0008    /* Column def contains "UNIQUE" or "PK" */
 #define COLFLAG_SORTERREF 0x0010   /* Use sorter-refs with this column */
+
+/* Allowed values for Column.colTime:
+*/
+#define COLTIME_SYSSTART 0x0001    /* System start */
+#define COLTIME_SYSEND   0x0002    /* System end */
+#define COLTIME_BUSSTART 0x0004    /* Business start */
+#define COLTIME_BUSEND   0x0008    /* Business end */
 
 /*
 ** A "Collating Sequence" is defined by an instance of the following
@@ -1976,7 +1985,7 @@ struct CollSeq {
 #define SQLITE_AFF_NUMERIC  'J'  /* originally 'C'... */
 #define SQLITE_AFF_INTEGER  'K'  /* originally 'D'... */
 #define SQLITE_AFF_REAL     'L'  /* originally 'E'... */
-#define SQLITE_AFF_DECIMAL  'M'  
+#define SQLITE_AFF_DECIMAL  'M'
 #define SQLITE_AFF_SMALL    'N'  /* for float */
 #else /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 #define SQLITE_AFF_NUMERIC  'C'
@@ -2126,6 +2135,8 @@ struct Table {
   int hasPartIdx;
   int hasExprIdx;
   int hasFuncIdx;      /* UNUSED: if the table has an index with uses a lua scalar func*/
+  int isHistory;
+  Trigger *pBusTimeTrigger;   /* Business Time trigger */
 #endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 };
 
@@ -2953,7 +2964,7 @@ struct NameContext {
 ** conflict-target clause.)  The pUpsertTargetWhere is the optional
 ** WHERE clause used to identify partial unique indexes.
 **
-** pUpsertSet is the list of column=expr terms of the UPDATE statement. 
+** pUpsertSet is the list of column=expr terms of the UPDATE statement.
 ** The pUpsertSet field is NULL for a ON CONFLICT DO NOTHING.  The
 ** pUpsertWhere is the WHERE clause for the UPDATE and is NULL if the
 ** WHERE clause is omitted.
@@ -3010,6 +3021,7 @@ struct Select {
   With *pWith;           /* WITH clause attached to this select. Or NULL. */
 #if defined(SQLITE_BUILDING_FOR_COMDB2)
   u8 recording;          /* set this to 1 from SELECTV */
+  Temporal *pTemporal;   /* FOR SYSTEM_TIME/BUSINESS_TIME clauses. Or NULL */
 #endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 #ifndef SQLITE_OMIT_WINDOWFUNC
   Window *pWin;          /* List of window functions */
@@ -3392,7 +3404,7 @@ struct Parse {
 #define PARSE_MODE_RENAME_TABLE  3
 
 #if defined(SQLITE_BUILDING_FOR_COMDB2)
-#if NODEBUG 
+#if NODEBUG
 #define SET_CURSOR_RECORDING(p,i)      \
    (p)->recording[(i)/sizeof(int)] |= (1<<(i)%sizeof(int))
 #define CLR_CURSOR_RECORDING(p,i)      \
@@ -4317,7 +4329,7 @@ int sqlite3FunctionUsesThisSrc(Expr*, SrcList*);
 Vdbe *sqlite3GetVdbe(Parse*);
 #if defined(SQLITE_BUILDING_FOR_COMDB2)
 void sqlite3CreateUpdCols(Vdbe *,sqlite3 *db, int, int *);
-int sqlite3PredicatedClearViews(sqlite3 *db, 
+int sqlite3PredicatedClearViews(sqlite3 *db,
       int (*predicated_delete)(const char *name, sqlite3 *db, void *arg), void *arg);
 #endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 #ifndef SQLITE_UNTESTABLE
@@ -4646,10 +4658,10 @@ int sqlite3KeyInfoIsWriteable(KeyInfo*);
 #endif
 int sqlite3CreateFunc(sqlite3 *, const char *, int, int, void *,
   void (*)(sqlite3_context*,int,sqlite3_value **),
-  void (*)(sqlite3_context*,int,sqlite3_value **), 
+  void (*)(sqlite3_context*,int,sqlite3_value **),
   void (*)(sqlite3_context*),
   void (*)(sqlite3_context*),
-  void (*)(sqlite3_context*,int,sqlite3_value **), 
+  void (*)(sqlite3_context*,int,sqlite3_value **),
   FuncDestructor *pDestructor
 );
 void sqlite3NoopDestructor(void*);
@@ -5026,17 +5038,17 @@ extern int sqlite3UnlockTable(const char *dbname, const char *table);
 extern int comdb2_dynamic_attach(sqlite3 *db, sqlite3_context *context, int argc, sqlite3_value **argv,
       const char *zName, const char *zFile, char **pzErrDyn, int version,
       int class, int local, int class_override, int proto_version);
-extern void comdb2_dynamic_detach(sqlite3 *db, int idx);  
+extern void comdb2_dynamic_detach(sqlite3 *db, int idx);
 extern int comdb2_fdb_check_class(const char *dbname);
 int sqlite3InitTable(sqlite3 *db, char **pzErrMsg, const char *zName);
 extern int sqlite3UpdateMemCollAttr(BtCursor *pCur, int idx, Mem *mem);
 char* sqlite3ExprDescribe(Vdbe *v, const Expr *pExpr);
 char* sqlite3ExprDescribeAtRuntime(Vdbe *v, const Expr *pExpr);
 struct params_info;
-char* sqlite3ExprDescribeParams(Vdbe *v, const Expr *pExpr, 
+char* sqlite3ExprDescribeParams(Vdbe *v, const Expr *pExpr,
       struct params_info **pParamsOut, int useFullColnames);
-char *sqlite3DescribeIndexOrder(sqlite3 *db, 
-      const char *zName, const char *zDb, 
+char *sqlite3DescribeIndexOrder(sqlite3 *db,
+      const char *zName, const char *zDb,
       Mem *m, int nfields, int *hasCondition,
       char **columns,
       int op,
@@ -5080,6 +5092,21 @@ int comdb2IsDryrun(Parse *);
 int comdb2SCIsDryRunnable(struct schema_change_type *);
 
 void comdb2WriteTransaction(Parse*);
+
+/*
+** An instance of this structure holds information about the
+** FOR TIME clause of a SELECT statement.
+*/
+struct Temporal {
+  struct {
+    Expr *pFrom;  /* The FROM expression.  NULL if ALL requested */
+    Expr *pTo;    /* The TO expression.  NULL if there is none */
+    int iIncl;
+    int iAll;
+    int iBus;
+  } a[2];
+};
+
 
 int sqlite3RecordCompareExprList(UnpackedRecord *rec, Mem *mems);
 int sqlite3ExprList2MemArray(ExprList *list, Mem *mems);

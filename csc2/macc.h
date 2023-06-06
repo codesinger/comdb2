@@ -98,7 +98,7 @@ enum ct_flags {
     CT_UPD_CASCADE = 0x00000001,
     CT_DEL_CASCADE = 0x00000002,
     CT_DEL_SETNULL = 0x00000004,
-    CT_NO_OVERLAP = 0x00000008
+    CT_NO_OVERLAP  = 0x00000008
 };
 
 enum ct_type { CT_FKEY, CT_CHECK };

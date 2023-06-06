@@ -206,6 +206,7 @@ typedef struct osqlstate {
     int error_is_remote; /* set if xerr is the error for a distributed tran
                             (i.e. already translated */
     int dirty; /* optimization to nop selectv only transactions */
+    struct timespec tstart; /* transaction start timespec */
     int running_ddl; /* ddl transaction */
     unsigned is_reorder_on : 1;
 
@@ -928,6 +929,17 @@ struct sqlclntstate {
     // Latch last statement's cost for comdb2_last_cost to fetch
     int64_t last_cost;
     int disable_fdb_push;
+
+    /* temporal table */
+    struct timespec tstart;
+    struct {
+        char *pFrom;
+        char *pTo;
+        int iIncl;
+        int iAll;
+        int iBus;
+    } pTemporal[2];
+    void *pTemporalParser;
 };
 
 /* Query stats. */
@@ -1175,7 +1187,7 @@ struct connection_info {
     int64_t sql_since_reset;
     int64_t num_resets;
     int64_t steps;
-    cdb2_client_intv_ds_t time_in_state; 
+    cdb2_client_intv_ds_t time_in_state;
     cdb2_client_datetime_t connect_time;
     cdb2_client_datetime_t last_reset_time;
     char *state;
@@ -1187,7 +1199,7 @@ struct connection_info {
     char *common_name; /* common name in the certificate */
     char common_name_str[ub_common_name];
 
-    /* latched in sqlinterfaces, not returned */ 
+    /* latched in sqlinterfaces, not returned */
     time_t connect_time_int;
     time_t last_reset_time_int;
     int node_int;

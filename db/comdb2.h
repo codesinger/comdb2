@@ -426,7 +426,7 @@ enum CONSTRAINT_FLAGS {
     CT_DEL_CASCADE = 0x00000002,
     CT_BLD_SKIP    = 0x00000004,
     CT_DEL_SETNULL = 0x00000008,
-    CT_NO_OVERLAP = 0x0000000C,
+    CT_NO_OVERLAP  = 0x00000010,
 };
 
 /* dbtable type specifier, please do not use for schema change type */

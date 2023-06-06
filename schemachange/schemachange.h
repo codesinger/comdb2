@@ -261,6 +261,13 @@ struct schema_change_type {
                              At least this datastructure lives as much as the
                            whole schema change (I will change this in the
                            future)*/
+    int is_history;
+    struct schema_change_type *history_s;
+    int history_rc;
+    int add_history;
+    int drop_history;
+    int alter_history;
+    struct dbtable *orig_db;
 
     int sc_thd_failed;
     int schema_change;
