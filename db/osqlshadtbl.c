@@ -82,6 +82,7 @@ static int truncate_tablecursor(bdb_state_type *bdb_env,
 
 static int process_local_shadtbl_usedb(struct sqlclntstate *clnt,
                                        char *tablename, int tableversion);
+static int process_local_shadtbl_timespec(struct sqlclntstate *clnt);
 static int process_local_shadtbl_skp(struct sqlclntstate *clnt, shad_tbl_t *tbl,
                                      int *bdberr, int crt_nops);
 static int process_local_shadtbl_qblob(struct sqlclntstate *clnt,
@@ -338,7 +339,7 @@ int osql_shadtbl_reset_for_selectv(struct sqlclntstate *clnt)
         rc = bdb_temp_table_close_cursor(thedb->bdb_env, osql->verify_cur,
                                          &bdberr);
         if (rc) {
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "%s: bdb_temp_table_close failed, rc=%d bdberr=%d\n",
                     __func__, rc, bdberr);
             return -1;
@@ -1028,7 +1029,7 @@ int osql_save_updrec(struct BtCursor *pCur, struct sql_thread *thd, char *pData,
     rc = bdb_temp_table_put(bdbenv, tbl->add_tbl->table, &tmp, sizeof(tmp),
                             (char *)pData, nData, NULL, &bdberr);
     if (rc) {
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "%s: fail to update genid %llx (%lld) rc=%d bdberr=%d (7)\n",
                 __func__, tmp, tmp, rc, bdberr);
         return -1;
@@ -1037,7 +1038,7 @@ int osql_save_updrec(struct BtCursor *pCur, struct sql_thread *thd, char *pData,
     /* add  the new indexes */
     rc = insert_record_indexes(pCur, thd, tmp, &bdberr);
     if (rc) {
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "%s: fail to update genid %llx (%lld) rc=%d bdberr=%d (8)\n",
                 __func__, tmp, pCur->genid, rc, bdberr);
         return -1;
@@ -1509,6 +1510,11 @@ int osql_shadtbl_process(struct sqlclntstate *clnt, int *nops, int *bdberr,
         if (rc)
             return -1;
 
+        if (tbl->db->periods[PERIOD_SYSTEM].enable) {
+            rc = process_local_shadtbl_timespec(clnt);
+            if (rc) return -1;
+        }
+
         rc = process_local_shadtbl_skp(clnt, tbl, bdberr, *nops);
         if (rc == SQLITE_TOOBIG) {
             *nops += tbl->nops;
@@ -1632,6 +1638,19 @@ static int process_local_shadtbl_usedb(struct sqlclntstate *clnt,
     }
     osql->replicant_numops++;
     DEBUG_PRINT_NUMOPS();
+    return rc;
+}
+
+static int process_local_shadtbl_timespec(struct sqlclntstate *clnt)
+{
+
+    osqlstate_t *osql = &clnt->osql;
+    int rc = 0;
+    int osql_nettype = tran2netrpl(clnt->dbtran.mode);
+
+    rc = osql_send_timespec(&osql->target, osql->rqid, osql->uuid, &(clnt->tstart),
+                            osql_nettype);
+
     return rc;
 }
 
@@ -1765,7 +1784,7 @@ static int process_local_shadtbl_updcols(struct sqlclntstate *clnt,
 
     cksz = (cdata[0] + 1) * sizeof(int);
     if (ldata != cksz) {
-        logmsg(LOGMSG_USER, 
+        logmsg(LOGMSG_USER,
                 "%s: mismatched size for updcol object: got %d should be %d!\n",
                 __func__, ldata, cksz);
         return SQLITE_INTERNAL;
@@ -1780,7 +1799,7 @@ static int process_local_shadtbl_updcols(struct sqlclntstate *clnt,
                            osql_nettype, &cdata[1], cdata[0]);
 
     if (rc) {
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "%s: error writting record to master in offload mode %d!\n",
                 __func__, rc);
         return SQLITE_INTERNAL;
@@ -1849,7 +1868,7 @@ static int process_local_shadtbl_qblob(struct sqlclntstate *clnt,
                              osql_nettype, data, ldata);
 
         if (rc) {
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "%s: error writting record to master in offload mode %d!\n",
                     __func__, rc);
             return SQLITE_INTERNAL;
@@ -2224,7 +2243,7 @@ static int insert_record_indexes(BtCursor *pCur, struct sql_thread *thd,
             datacopy = alloca(4 * pCur->db->ix_collattr[ix]);
 
             rc = extract_decimal_quantum(pCur->db, ix, pCur->ondisk_buf, datacopy,
-                                       4 * pCur->db->ix_collattr[ix], 
+                                       4 * pCur->db->ix_collattr[ix],
                                        &datacopylen);
             if (rc) {
                 logmsg(LOGMSG_ERROR, "%s: failed to construct decimal index rc=%d\n",
@@ -2474,7 +2493,7 @@ static int close_shadtbl_cursors(bdb_state_type *bdb_env, osqlstate_t *osql,
 
         rc = bdb_temp_table_close_cursor(bdb_env, *shad_cur, &bdberr);
         if (rc) {
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "%s: bdb_temp_table_close failed, rc=%d bdberr=%d\n",
                     __func__, rc, bdberr);
             return -1;
@@ -2843,7 +2862,7 @@ static int process_local_shadtbl_recgenids(struct sqlclntstate *clnt,
             rc = process_local_shadtbl_usedb(clnt, key.tablename,
                                              key.tableversion);
             if (rc) {
-                logmsg(LOGMSG_ERROR, 
+                logmsg(LOGMSG_ERROR,
                         "%s:%d: error writting record to master in offload mode!\n",
                         __func__, __LINE__);
                 return SQLITE_INTERNAL;
@@ -2859,7 +2878,7 @@ static int process_local_shadtbl_recgenids(struct sqlclntstate *clnt,
         rc = osql_send_recordgenid(&osql->target, osql->rqid, osql->uuid,
                                    key.genid, osql_nettype);
         if (rc) {
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "%s: error writting record to master in offload mode!\n",
                     __func__);
             return SQLITE_INTERNAL;
