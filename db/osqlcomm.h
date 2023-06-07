@@ -61,6 +61,14 @@ int osql_send_usedb(osql_target_t *target, unsigned long long rqid, uuid_t uuid,
                     char *tablename, int type, unsigned long long version);
 
 /**
+ * Send TIMESPEC op
+ * It handles remote/local connectivity
+ *
+ */
+int osql_send_timespec(osql_target_t *target, unsigned long long rqid, uuid_t uuid,
+                       struct timespec *tstart, int type, SBUF2 *logsb);
+
+/**
  * Send INDEX op
  * It handles remote/local connectivity
  *
@@ -275,7 +283,7 @@ const uint8_t *osqlcomm_errstat_type_get(errstat_t *p_errstat_type,
                                          const uint8_t *p_buf,
                                          const uint8_t *p_buf_end);
 /**
- * Copy the little-endian errstat_t pointed to by errstat_type into 
+ * Copy the little-endian errstat_t pointed to by errstat_type into
  * p_errstat_type.  Exposed for fstblk.
  *
  */
