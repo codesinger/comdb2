@@ -65,6 +65,7 @@ int gbl_master_retry_poll_ms = 100;
 
 static int osql_send_usedb_logic(struct BtCursor *pCur, struct sql_thread *thd,
                                  int nettype);
+static int osql_send_timespec_logic(struct sqlclntstate *clnt, int nettype);
 static int osql_send_delidx_logic(struct BtCursor *pCur,
                                   struct sqlclntstate *clnt, int nettype);
 static int osql_send_insidx_logic(struct BtCursor *pCur,
@@ -433,6 +434,11 @@ static int osql_send_del_logic(struct BtCursor *pCur, struct sql_thread *thd)
     int rc = osql_send_usedb_logic(pCur, thd, NET_OSQL_SOCK_RPL);
     if (rc != SQLITE_OK)
         return rc;
+    if (pCur->db->periods[PERIOD_SYSTEM].enable ||
+        pCur->db->n_rev_cascade_systime > 0)
+        rc = osql_send_timespec_logic(clnt, NET_OSQL_SOCK_RPL);
+    if (rc != SQLITE_OK)
+        return rc;
 
     if (osql->is_reorder_on) {
         rc = osql_send_delrec(
@@ -543,6 +549,11 @@ static int osql_send_ins_logic(struct BtCursor *pCur, struct sql_thread *thd,
     osqlstate_t *osql = &thd->clnt->osql;
 
     int rc = osql_send_usedb_logic(pCur, thd, NET_OSQL_SOCK_RPL);
+    if (rc != SQLITE_OK)
+        return rc;
+    if (pCur->db->periods[PERIOD_SYSTEM].enable ||
+        pCur->db->n_rev_cascade_systime > 0)
+        rc = osql_send_timespec_logic(thd->clnt, NET_OSQL_SOCK_RPL);
     if (rc != SQLITE_OK)
         return rc;
 
@@ -656,6 +667,11 @@ static int osql_send_upd_logic(struct BtCursor *pCur, struct sql_thread *thd,
     osqlstate_t *osql = &thd->clnt->osql;
 
     int rc = osql_send_usedb_logic(pCur, thd, NET_OSQL_SOCK_RPL);
+    if (rc != SQLITE_OK)
+        return rc;
+    if (pCur->db->periods[PERIOD_SYSTEM].enable ||
+        pCur->db->n_rev_cascade_systime > 0)
+        rc = osql_send_timespec_logic(thd->clnt, NET_OSQL_SOCK_RPL);
     if (rc != SQLITE_OK)
         return rc;
 
@@ -1074,7 +1090,7 @@ retry:
         rc = osql_wait(clnt);
         if (rc) {
             rcout = SQLITE_CLIENT_CHANGENODE;
-            logmsg(LOGMSG_ERROR, "%s line %d setting rcout to (%d) from %d\n", 
+            logmsg(LOGMSG_ERROR, "%s line %d setting rcout to (%d) from %d\n",
                     __func__, __LINE__, rcout, rc);
         } else {
 
@@ -1188,7 +1204,7 @@ err:
     /* unregister this osql thread from checkboard */
     rc = osql_end(clnt);
     if (rc && !rcout) {
-        logmsg(LOGMSG_ERROR, "%s line %d setting rout to SQLITE_INTERNAL (%d) rc is %d\n", 
+        logmsg(LOGMSG_ERROR, "%s line %d setting rout to SQLITE_INTERNAL (%d) rc is %d\n",
                 __func__, __LINE__, SQLITE_INTERNAL, rc);
         rcout = SQLITE_INTERNAL;
     }
@@ -1207,7 +1223,7 @@ done:
         if (iirc != 0) /* if error or has selectv rows */
         {
             if (iirc < 0) {
-                logmsg(LOGMSG_ERROR, 
+                logmsg(LOGMSG_ERROR,
                         "%s: osql_shadtbl_has_selectv failed rc=%d bdberr=%d\n",
                         __func__, rc, bdberr);
             }
@@ -1229,7 +1245,7 @@ done:
         /* we also need to free the tran object */
         rc = trans_abort_shadow((void **)&clnt->dbtran.shadow_tran, &bdberr);
         if (rc)
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "%s:%d failed to abort shadow tran for socksql rc=%d\n",
                     __FILE__, __LINE__, rc);
     }
@@ -1297,7 +1313,7 @@ int osql_sock_abort(struct sqlclntstate *clnt, int type)
      */
     rc = trans_abort_shadow((void **)&clnt->dbtran.shadow_tran, &bdberr);
     if (rc) {
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "%s:%d failed to abort shadow tran for socksql rc=%d\n",
                 __FILE__, __LINE__, rc);
     }
@@ -1363,11 +1379,39 @@ static int osql_send_usedb_logic_int(char *tablename, struct sqlclntstate *clnt,
     return rc;
 }
 
+static int osql_send_timespec_logic_int(struct sqlclntstate *clnt, int nettype)
+{
+    osqlstate_t *osql = &clnt->osql;
+    int rc = 0;
+    int restarted;
+
+    if (memcmp(&(osql->tstart), &(clnt->tstart), sizeof(struct timespec)) == 0)
+        return SQLITE_OK;
+
+    do {
+        rc = osql_send_timespec(&osql->target, osql->rqid, osql->uuid, &(clnt->tstart),
+                                nettype);
+        RESTART_SOCKSQL;
+    } while (restarted);
+
+    if (rc == SQLITE_OK) {
+        /* cache the sent tstart */
+        memcpy(&(osql->tstart), &(clnt->tstart), sizeof(struct timespec));
+    }
+
+    return rc;
+}
+
 static int osql_send_usedb_logic(struct BtCursor *pCur, struct sql_thread *thd,
                                  int nettype)
 {
     return osql_send_usedb_logic_int(pCur->db->tablename, thd->clnt,
                                      nettype);
+}
+
+static int osql_send_timespec_logic(struct sqlclntstate *clnt, int nettype)
+{
+    return osql_send_timespec_logic_int(clnt, nettype);
 }
 
 inline int osql_send_updstat_logic(struct BtCursor *pCur,
