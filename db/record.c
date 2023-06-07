@@ -64,6 +64,8 @@ static int check_blob_sizes(struct ireq *iq, blob_buffer_t *blobs,
 
 void free_cached_idx(uint8_t * *cached_idx);
 
+int temporal_overwrite_systime(struct ireq *iq, uint8_t *rec, int use_tstart);
+
 /*
  * Add a record:
  *  - check arguments
@@ -375,7 +377,7 @@ int add_record(struct ireq *iq, void *trans, const uint8_t *p_buf_tag_name,
         }
         od_dta = allocced_memory;
 
-        if ((iq->have_client_endian && TAGGED_API_LITTLE_ENDIAN == iq->client_endian) || 
+        if ((iq->have_client_endian && TAGGED_API_LITTLE_ENDIAN == iq->client_endian) ||
                 (flags & RECFLAGS_COMDBG_FROM_LE)) {
             conv_flags |= CONVERT_LITTLE_ENDIAN_CLIENT;
         }
@@ -768,6 +770,7 @@ int upd_record(struct ireq *iq, void *trans, void *primkey, int rrn,
     void *record = p_buf_rec;
     void *vrecord = p_buf_vrec;
     size_t reclen = p_buf_rec_end - p_buf_rec;
+    int insert_to_history = 0;
     int got_oldblobs = 0;
     blob_buffer_t add_blobs_buf[MAXBLOBS] = {{0}};
     blob_buffer_t del_blobs_buf[MAXBLOBS] = {{0}};
@@ -823,6 +826,10 @@ int upd_record(struct ireq *iq, void *trans, void *primkey, int rrn,
         reqpushprefixf(iq, "upd_record: ");
         prefixes++;
     }
+
+    if (is_event_from_cascade(flags) &&
+        iq->usedb->periods[PERIOD_SYSTEM].enable)
+        insert_to_history = 1;
 
     if (!iq->usedb) {
         if (iq->debug)
@@ -1111,8 +1118,9 @@ int upd_record(struct ireq *iq, void *trans, void *primkey, int rrn,
      * If required, remember the old blobs ready for the update trigger.
      * Handle deadlock correctly.
      */
-    if (!(flags & RECFLAGS_NO_TRIGGERS) &&
-        javasp_trans_care_about(iq->jsph, JAVASP_TRANS_LISTEN_SAVE_BLOBS_UPD)) {
+    if ((!(flags & RECFLAGS_NO_TRIGGERS) &&
+        javasp_trans_care_about(iq->jsph, JAVASP_TRANS_LISTEN_SAVE_BLOBS_UPD)) ||
+        insert_to_history) {
         rc = save_old_blobs(iq, trans, ".ONDISK", old_dta, rrn, vgenid,
                             &oldblobs);
         if (rc != 0) {
@@ -1177,6 +1185,18 @@ int upd_record(struct ireq *iq, void *trans, void *primkey, int rrn,
             }
             reqerrstr(iq, COMDB2_UPD_RC_CNVT_DTA,
                       "error convert data %s->.ONDISK '%s'", tag, str);
+            goto err;
+        }
+    }
+
+    if (is_event_from_cascade(flags) &&
+        iq->usedb->periods[PERIOD_SYSTEM].enable) {
+        rc = temporal_overwrite_systime(iq, od_dta, 1);
+        if (rc) {
+            logmsg(LOGMSG_ERROR,
+                   "%s: temporal_overwrite_systime table %s failed\n", __func__,
+                   iq->usedb->tablename);
+            retrc = ERR_INTERNAL;
             goto err;
         }
     }
@@ -1580,7 +1600,7 @@ int upd_record(struct ireq *iq, void *trans, void *primkey, int rrn,
 
     /* For live schema change */
     rc = live_sc_post_update(iq, trans, vgenid, old_dta, *genid, od_dta,
-                             ins_keys, del_keys, od_len, updCols, blobs, 
+                             ins_keys, del_keys, od_len, updCols, blobs,
                              maxblobs, flags, rrn, deferredAdd, del_idx_blobs,
                              add_idx_blobs);
     if (rc != 0) {
@@ -1609,6 +1629,47 @@ int upd_record(struct ireq *iq, void *trans, void *primkey, int rrn,
             retrc = ERR_VERIFY;
             ERR;
         }
+    }
+
+    if (insert_to_history) {
+        int temporal_generate_history_data(struct ireq * iq, uint8_t * his_dta,
+                                           uint8_t * old_dta, uint8_t * od_dta,
+                                           size_t od_len);
+        void free_cached_idx(uint8_t * *cached_idx);
+        void *his_dta = NULL;
+        struct dbtable *usedb_sav;
+        const unsigned char tag_name_ondisk[] = ".ONDISK";
+        const size_t tag_name_ondisk_len = 8 /*includes NUL*/;
+        int lcl_rrn = 0;
+        unsigned long long lcl_genid = 0;
+        int addflags;
+        his_dta = malloc(od_len);
+        temporal_generate_history_data(iq, his_dta, old_dta, od_dta, od_len);
+        if (iq->idxInsert || iq->idxDelete) {
+            free_cached_idx(iq->idxInsert);
+            free_cached_idx(iq->idxDelete);
+            free(iq->idxInsert);
+            free(iq->idxDelete);
+            iq->idxInsert = iq->idxDelete = NULL;
+        }
+        usedb_sav = iq->usedb;
+        iq->usedb = iq->usedb->history_db;
+        addflags = RECFLAGS_DYNSCHEMA_NULLS_ONLY;
+        addflags |= RECFLAGS_NO_CONSTRAINTS;
+        retrc = add_record(
+            iq, trans, tag_name_ondisk,
+            tag_name_ondisk + tag_name_ondisk_len,       /*tag*/
+            his_dta, his_dta + od_len,                   /*dta*/
+            NULL,                                        /*nulls, no need as no
+                                                           ctag2stag is called */
+            del_blobs_buf, MAXBLOBS,                     /*blobs*/
+            opfailcode, ixfailnum, &lcl_rrn, &lcl_genid, /*new id*/
+            -1ULL, BLOCK2_ADDKL, blkpos, addflags, 0);   /* do I need this?*/
+        if (retrc)
+            logmsg(LOGMSG_ERROR, "%s: failed to add to history table rc %d\n",
+                   __func__, retrc);
+        iq->usedb = usedb_sav;
+        free(his_dta);
     }
 
 err:
@@ -1648,6 +1709,7 @@ int del_record(struct ireq *iq, void *trans, void *primkey, int rrn,
     int od_len_int;
     int fndlen;
     int rc;
+    int insert_to_history = 0;
     int got_oldblobs = 0;
     blob_buffer_t blobs_buf[MAXBLOBS] = {{0}};
     blob_buffer_t *del_idx_blobs = NULL;
@@ -1665,6 +1727,10 @@ int del_record(struct ireq *iq, void *trans, void *primkey, int rrn,
         retrc = ERR_BADREQ;
         goto err;
     }
+
+    if (is_event_from_cascade(flags) &&
+        iq->usedb->periods[PERIOD_SYSTEM].enable)
+        insert_to_history = 1;
 
     int d_ms = BDB_ATTR_GET(thedb->bdb_attr, DELAY_WRITES_IN_RECORD_C);
     if (d_ms) {
@@ -1846,7 +1912,9 @@ int del_record(struct ireq *iq, void *trans, void *primkey, int rrn,
      * them all here.  Handle deadlock correctly.
      */
     if (!got_oldblobs && ((!(flags & RECFLAGS_NO_TRIGGERS) &&
-        javasp_trans_care_about(iq->jsph, JAVASP_TRANS_LISTEN_SAVE_BLOBS_DEL)))) {
+                           javasp_trans_care_about(
+                               iq->jsph, JAVASP_TRANS_LISTEN_SAVE_BLOBS_DEL)) ||
+                          insert_to_history)) {
         rc = save_old_blobs(iq, trans, ".ONDISK", od_dta, rrn, genid, &oldblobs);
         if (rc != 0) {
             *opfailcode = OP_FAILED_INTERNAL + ERR_SAVE_BLOBS;
@@ -1856,6 +1924,7 @@ int del_record(struct ireq *iq, void *trans, void *primkey, int rrn,
                 retrc = *opfailcode;
             goto err;
         }
+        blob_status_to_blob_buffer(&oldblobs, blobs_buf);
         got_oldblobs = 1;
     }
 
@@ -1922,6 +1991,47 @@ int del_record(struct ireq *iq, void *trans, void *primkey, int rrn,
     if (is_event_from_cascade(flags))
         iq->usedb->casc_write_count++;
     gbl_sc_last_writer_time = comdb2_time_epoch();
+
+    if (insert_to_history) {
+        int temporal_generate_history_data(struct ireq * iq, uint8_t * his_dta,
+                                           uint8_t * old_dta, uint8_t * od_dta,
+                                           size_t od_len);
+        void free_cached_idx(uint8_t * *cached_idx);
+        void *his_dta = NULL;
+        struct dbtable *usedb_sav;
+        const unsigned char tag_name_ondisk[] = ".ONDISK";
+        const size_t tag_name_ondisk_len = 8 /*includes NUL*/;
+        int lcl_rrn = 0;
+        unsigned long long lcl_genid = 0;
+        int addflags;
+        his_dta = malloc(od_len);
+        temporal_generate_history_data(iq, his_dta, od_dta, NULL, od_len);
+        if (iq->idxInsert || iq->idxDelete) {
+            free_cached_idx(iq->idxInsert);
+            free_cached_idx(iq->idxDelete);
+            free(iq->idxInsert);
+            free(iq->idxDelete);
+            iq->idxInsert = iq->idxDelete = NULL;
+        }
+        usedb_sav = iq->usedb;
+        iq->usedb = iq->usedb->history_db;
+        addflags = RECFLAGS_DYNSCHEMA_NULLS_ONLY;
+        addflags |= RECFLAGS_NO_CONSTRAINTS;
+        retrc =
+            add_record(iq, trans, tag_name_ondisk,
+                       tag_name_ondisk + tag_name_ondisk_len, /*tag*/
+                       his_dta, his_dta + od_len,             /*dta*/
+                       NULL,                /*nulls, no need as no
+                                              ctag2stag is called */
+                       blobs_buf, MAXBLOBS, /*blobs*/
+                       opfailcode, ixfailnum, &lcl_rrn, &lcl_genid, /*new id*/
+                       -1ULL, BLOCK2_ADDKL, 0, addflags, 0); /* do I need this?*/
+        if (retrc)
+            logmsg(LOGMSG_ERROR, "%s: failed to add to history table rc %d\n",
+                   __func__, retrc);
+        iq->usedb = usedb_sav;
+        free(his_dta);
+    }
 
 err:
     dbglog_record_db_write(iq, "delete");
@@ -2032,7 +2142,7 @@ int upd_new_record(struct ireq *iq, void *trans, unsigned long long oldgenid,
     }
 
     if (0 != rc) {
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "upd_new_record oldgenid 0x%llx remap_update_columns -> "
                 "rc %d failed\n",
                 oldgenid, rc);
@@ -2078,7 +2188,7 @@ int upd_new_record(struct ireq *iq, void *trans, unsigned long long oldgenid,
                                     MAXBLOBS, 1);
 
         if (rc == -1) {
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "upd_new_record: newgenid 0x%llx conversion error\n",
                     newgenid);
             if (iq->debug)
@@ -2178,6 +2288,58 @@ int upd_new_record(struct ireq *iq, void *trans, unsigned long long oldgenid,
         use_new_tag = 1;
     }
 
+    if (iq->usedb->overwrite_systime) {
+        if (!use_new_tag) {
+            sc_old = malloc(iq->usedb->lrl);
+            if (!sc_old) {
+                logmsg(LOGMSG_ERROR, "%s:%d malloc failed\n", __func__,
+                       __LINE__);
+                retrc = ERR_INTERNAL;
+                goto err;
+            }
+            rc = stag_to_stag_buf(iq->usedb->tablename, ".ONDISK", old_dta,
+                                  ".NEW..ONDISK", sc_old, NULL);
+            if (rc) {
+                logmsg(LOGMSG_ERROR, "%s:%d failed to convert to new ondisk\n",
+                       __func__, __LINE__);
+                retrc = ERR_INTERNAL;
+                goto err;
+            }
+            sc_new = malloc(iq->usedb->lrl);
+            if (!sc_new) {
+                logmsg(LOGMSG_ERROR, "%s:%d malloc failed\n", __func__,
+                       __LINE__);
+                retrc = ERR_INTERNAL;
+                goto err;
+            }
+            rc = stag_to_stag_buf(iq->usedb->tablename, ".ONDISK", new_dta,
+                                  ".NEW..ONDISK", sc_new, NULL);
+            if (rc) {
+                logmsg(LOGMSG_ERROR, "%s:%d failed to convert to new ondisk\n",
+                       __func__, __LINE__);
+                retrc = ERR_INTERNAL;
+                goto err;
+            }
+            use_new_tag = 1;
+        }
+        rc = temporal_overwrite_systime(iq, sc_old, 0);
+        if (rc) {
+            logmsg(LOGMSG_ERROR,
+                   "%s: temporal_overwrite_systime table %s failed\n", __func__,
+                   iq->usedb->tablename);
+            retrc = ERR_INTERNAL;
+            goto err;
+        }
+        rc = temporal_overwrite_systime(iq, sc_new, 0);
+        if (rc) {
+            logmsg(LOGMSG_ERROR,
+                   "%s: temporal_overwrite_systime table %s failed\n", __func__,
+                   iq->usedb->tablename);
+            retrc = ERR_INTERNAL;
+            goto err;
+        }
+    }
+
     /*
      * Update blob records
      */
@@ -2206,7 +2368,7 @@ int upd_new_record(struct ireq *iq, void *trans, unsigned long long oldgenid,
             }
 
             if (idx < 0 || idx >= myupdatecols[0]) {
-                logmsg(LOGMSG_ERROR, 
+                logmsg(LOGMSG_ERROR,
                         "upd_new_record newgenid 0x%llx get_schema_blob_field_idx "
                         "-> idx %d failed\n",
                     newgenid, idx);
@@ -2221,7 +2383,7 @@ int upd_new_record(struct ireq *iq, void *trans, unsigned long long oldgenid,
                     reqprintf(iq, "blob_upd_genid blobno %d rc %d", blobn, rc);
                 }
                 if (0 != rc) {
-                    logmsg(LOGMSG_ERROR, 
+                    logmsg(LOGMSG_ERROR,
                             "upd_new_record newgenid 0x%llx blob_upd_genid "
                             "-> blobn %d failed\n",
                             newgenid, blobn);
@@ -2408,6 +2570,35 @@ int del_new_record(struct ireq *iq, void *trans, unsigned long long genid,
 
         /* use ".NEW..ONDISK" to form keys */
         use_new_tag = 1;
+    }
+
+    if (iq->usedb->overwrite_systime) {
+        if (!use_new_tag) {
+            sc_old = malloc(iq->usedb->lrl);
+            if (!sc_old) {
+                logmsg(LOGMSG_ERROR, "%s:%d malloc failed\n", __func__,
+                       __LINE__);
+                retrc = ERR_INTERNAL;
+                goto err;
+            }
+            rc = stag_to_stag_buf(iq->usedb->tablename, ".ONDISK", old_dta,
+                                  ".NEW..ONDISK", sc_old, NULL);
+            if (rc) {
+                logmsg(LOGMSG_ERROR, "%s:%d failed to convert to new ondisk\n",
+                       __func__, __LINE__);
+                retrc = ERR_INTERNAL;
+                goto err;
+            }
+            use_new_tag = 1;
+        }
+        rc = temporal_overwrite_systime(iq, sc_old, 0);
+        if (rc) {
+            logmsg(LOGMSG_ERROR,
+                   "%s: temporal_overwrite_systime table %s failed\n", __func__,
+                   iq->usedb->tablename);
+            retrc = ERR_INTERNAL;
+            goto err;
+        }
     }
 
     /* no plan:
