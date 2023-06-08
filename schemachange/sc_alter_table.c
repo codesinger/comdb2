@@ -52,7 +52,10 @@ static int prepare_sc_plan(struct schema_change_type *s, int old_changed,
         } else {
             sc_printf(s, "Using plan.\n");
             newdb->plan = theplan;
-            if (newdb->plan->dta_plan) changed = SC_TAG_CHANGE;
+            if (newdb->plan->dta_plan)
+                changed = SC_TAG_CHANGE;
+            else if (newdb->plan->plan_convert == SC_KEYVER_CONVERT)
+                changed = SC_KEY_CHANGE;
         }
         s->retry_bad_genids = 0;
     }
@@ -312,6 +315,38 @@ static inline int wait_to_resume(struct schema_change_type *s)
     return rc;
 }
 
+int do_alter_history(struct ireq *iq, tran_type *tran)
+{
+    struct schema_change_type *s = iq->sc;
+    struct dbtable *db = s->newdb;
+    struct schema_change_type *scopy = new_schemachange_type();
+    if (init_history_sc(s, db, scopy)) {
+        reqerrstr(iq, ERR_SC, "History table name too long");
+        return SC_CSC2_ERROR;
+    }
+    scopy->kind = SC_ALTERTABLE;
+    scopy->use_plan = 1;
+    scopy->scanmode = SCAN_PARALLEL;
+    scopy->newcsc2 = generate_history_csc2(db);
+
+    iq->sc = scopy;
+    s->history_rc = do_alter_table(iq, s, tran);
+    iq->sc = s;
+    if (s->history_rc != SC_OK && s->history_rc != SC_COMMIT_PENDING) {
+        reqerrstr(iq, ERR_SC, "Failed to alter history table");
+        sc_errf(s, "error altering history table\n");
+        logmsg(LOGMSG_ERROR, "%s failed with rc %d\n", __func__, s->history_rc);
+        return s->history_rc;
+    }
+
+    scopy->newdb->is_history_table = 1;
+    s->newdb->history_db = scopy->newdb;
+    scopy->newdb->orig_db = s->newdb;
+
+    sc_printf(s, "Alter history table %s ok\n", scopy->tablename);
+    return SC_OK;
+}
+
 int gbl_test_scindex_deadlock = 0;
 int gbl_test_sc_resume_race = 0;
 int gbl_readonly_sc = 0;
@@ -361,7 +396,7 @@ static void check_for_idx_rename(struct dbtable *newdb, struct dbtable *olddb)
 static int do_merge_table(struct ireq *iq, struct schema_change_type *s,
                           tran_type *tran);
 static int optionsChanged(struct schema_change_type *sc, struct scinfo *scinfo){
-    if(sc->headers != scinfo->olddb_odh || 
+    if(sc->headers != scinfo->olddb_odh ||
         sc->ip_updates != scinfo->olddb_inplace_updates ||
         sc->instant_sc != scinfo->olddb_instant_sc ||
         sc->compress_blobs != scinfo->olddb_compress_blobs ||
@@ -417,7 +452,7 @@ int do_alter_table(struct ireq *iq, struct schema_change_type *s,
         sc_printf(s," instant_sc: %d\n", s->instant_sc);
         sc_printf(s," compress: %d\n", s->compress);
         sc_printf(s," compress_blobs: %d\n", s->compress_blobs);
-        sc_printf(s," --------------------------------------------------\n"); 
+        sc_printf(s," --------------------------------------------------\n");
         sc_printf(s," old options -> \n");
         sc_printf(s," headers: %d\n", scinfo.olddb_odh);
         sc_printf(s," ip_updates: %d\n", scinfo.olddb_inplace_updates);
@@ -480,6 +515,14 @@ int do_alter_table(struct ireq *iq, struct schema_change_type *s,
     }
     newdb->ix_blob = newdb->schema->ix_blob;
 
+    /* enable system versioning */
+    if (!db->periods[PERIOD_SYSTEM].enable &&
+        newdb->periods[PERIOD_SYSTEM].enable) {
+        newdb->overwrite_systime = 1;
+    }
+    newdb->is_history_table = db->is_history_table;
+    if (newdb->is_history_table) newdb->orig_db = s->orig_db;
+
     Pthread_mutex_unlock(&csc2_subsystem_mtx);
 
     if ((iq == NULL || iq->tranddl <= 1) &&
@@ -507,6 +550,19 @@ int do_alter_table(struct ireq *iq, struct schema_change_type *s,
     s->schema_change = changed =
         prepare_sc_plan(s, changed, db, newdb, &s->plan);
     print_schemachange_info(s, db, newdb);
+
+    if (s->is_history == 0 && db && db->periods[PERIOD_SYSTEM].enable &&
+        newdb->periods[PERIOD_SYSTEM].enable &&
+        (changed == SC_TAG_CHANGE || !newdb->odh ||
+         !newdb->instant_schema_change || !s->use_plan ||
+         s->plan.dta_plan == -1)) {
+        backout(newdb);
+        cleanup_newdb(newdb);
+        sc_errf(s, "Only instant schema change is allowed on temporal tables");
+        reqerrstr(iq, ERR_SC,
+                  "Only instant schema change is allowed on temporal tables");
+        return -1;
+    }
 
     /*************** open  tables ********************************************/
 
@@ -701,6 +757,22 @@ errout:
         return rc;
     }
     newdb->iq = NULL;
+
+    int pre_is_temproal, post_is_temproal;
+    pre_is_temproal = post_is_temproal = 0;
+    if (s->is_history == 0 && s->db && s->db->periods[PERIOD_SYSTEM].enable)
+        pre_is_temproal = 1;
+    if (s->is_history == 0 && s->newdb &&
+        s->newdb->periods[PERIOD_SYSTEM].enable)
+        post_is_temproal = 1;
+    if (pre_is_temproal || post_is_temproal) {
+        if (!pre_is_temproal && post_is_temproal)
+            s->add_history = 1;
+        else if (pre_is_temproal && !post_is_temproal)
+            s->drop_history = 1;
+        else
+            s->alter_history = 1;
+    }
 
     /* check for rename outside of taking schema lock */
     /* handle renaming sqlite_stat1 entries for idx */
@@ -1044,6 +1116,8 @@ int finalize_alter_table(struct ireq *iq, struct schema_change_type *s,
 
     newdb->plan = NULL;
     db->schema = clone_schema(newdb->schema);
+
+    db->overwrite_systime = newdb->overwrite_systime = 0;
 
     free_db_and_replace(db, newdb);
     fix_constraint_pointers(db, newdb);

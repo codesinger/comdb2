@@ -61,9 +61,30 @@ in osqlcomm.c, where the final argument is
 dt.upsert_flags); /* do I need this?*/
 ```
 
+## schemachange/sc_util.c
 
+The pull request adds two new functions that deal with data types in generating csc2
+files.
 
+Since the pull request was originally created, two new types have been added:
+CLIENT_SEQUENCE, CLIENT_FUNCTION, SERVER_SEQUENCE, SERVER_FUNCTION.
 
+Not sure how to modify these functions for the new types.
+
+## schemchange/schemachange.h
+
+The old version of `schema_change_type` had a field called `type`, which at one
+point in the pull request is set as follows: `scopy->type = DBTYPE_TAGGED_TABLE;`
+
+What, if anything, do I replace this with?
+
+## schema_change_type
+
+The old pull request used a version of `schema_change_type` that had ints to specify
+things such as `addonly`, `alteronly`, etc.
+
+I have replaced `addonly = 1` with `kind = SC_ADDTABLE` and
+`alteronly = 1` with `kind = SC_ALTERTABLE`.  Is this right?
 
 
 ## bdb/bdb_fetch.h

@@ -116,7 +116,7 @@ int add_table_to_environment(char *table, const char *csc2,
     struct errstat err = {0};
     newdb = create_new_dbtable(thedb, table, (char *)csc2, 0 /*dbnum*/,
                                thedb->num_dbs, 0 /*no altname*/,
-                               timepartition_name ? 1 : 0 /* allow null if tpt rollout */, 
+                               timepartition_name ? 1 : 0 /* allow null if tpt rollout */,
                                0 /* side effects */, &err);
     if (!newdb) {
         sc_client_error(s, "%s", err.errstr);
@@ -126,6 +126,9 @@ int add_table_to_environment(char *table, const char *csc2,
 
         return SC_CSC2_ERROR;
     }
+
+    if (s && s->is_history) newdb->is_history_table = 1;
+    if (newdb->is_history_table) newdb->orig_db = s->orig_db;
 
     newdb->dtastripe = gbl_dtastripe;
     newdb->iq = iq;
@@ -208,6 +211,49 @@ static inline void set_empty_options(struct schema_change_type *s)
     if (s->instant_sc == -1) s->instant_sc = gbl_init_with_instant_sc;
 }
 
+int do_add_history(struct ireq *iq, struct dbtable *db, tran_type *trans)
+{
+    struct schema_change_type *s = iq->sc;
+    struct schema_change_type *scopy = NULL;
+    char view[MAXTABLELEN];
+
+    assert(s->is_history == 0 && db && db->periods[PERIOD_SYSTEM].enable);
+    scopy = new_schemachange_type();
+    if (init_history_sc(s, db, scopy)) {
+        reqerrstr(iq, ERR_SC, "History table name too long");
+        return SC_CSC2_ERROR;
+    }
+    scopy->kind = SC_ADDTABLE;
+    scopy->newcsc2 = generate_history_csc2(db);
+
+    snprintf(view, MAXTABLELEN, "%s_systime", db->tablename);
+    if (get_dbtable_by_name(view)) {
+        free_schema_change_type(scopy);
+        s->history_s = NULL;
+        reqerrstr(iq, ERR_SC, "Table %s already exists", view);
+        sc_errf(s, "Table %s already exists", view);
+        logmsg(LOGMSG_ERROR, "Table %s already exists\n", view);
+        return SC_TABLE_ALREADY_EXIST;
+    }
+
+    iq->sc = scopy;
+    s->history_rc = do_add_table(iq, s, trans);
+    iq->sc = s;
+    if (s->history_rc != SC_OK && s->history_rc != SC_COMMIT_PENDING) {
+        reqerrstr(iq, ERR_SC, "Failed to add history table");
+        sc_errf(s, "error adding history table\n");
+        logmsg(LOGMSG_ERROR, "%s failed with rc %d\n", __func__, s->history_rc);
+        return s->history_rc;
+    }
+
+    scopy->db->is_history_table = 1;
+    s->db->history_db = scopy->db;
+    scopy->db->orig_db = s->db;
+
+    sc_printf(s, "Add history table %s ok\n", scopy->tablename);
+    return SC_OK;
+}
+
 int do_add_table(struct ireq *iq, struct schema_change_type *s,
                  tran_type *trans)
 {
@@ -256,6 +302,11 @@ int do_add_table(struct ireq *iq, struct schema_change_type *s,
        will have to be changed manually by the operator */
     set_bdb_option_flags(db, s->headers, s->ip_updates, s->instant_sc,
                          db->schema_version, s->compress, s->compress_blobs, 1);
+
+    if (s->is_history == 0 && s->db && s->db->periods[PERIOD_SYSTEM].enable) {
+        s->add_history = 1;
+        return do_add_history(iq, s->db, trans);
+    }
 
     return 0;
 }
@@ -370,7 +421,7 @@ int finalize_add_table(struct ireq *iq, struct schema_change_type *s,
         }
         bdb_handle_dbp_add_hash(db->handle, gbl_init_with_bthash);
     }
-     
+
 
     /*
      * if this is the original request for a partition table add,

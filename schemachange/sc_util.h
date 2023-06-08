@@ -40,4 +40,8 @@ void set_schema_change_in_progress(const char *func, int line, int val);
 int get_schema_change_in_progress(const char *func, int line);
 int trim_sc_history_entries(tran_type *tran, const char *tablename);
 
+int init_history_sc(struct schema_change_type *s, struct dbtable *db,
+                    struct schema_change_type *scopy);
+char *generate_history_csc2(struct dbtable *db);
+
 #endif
