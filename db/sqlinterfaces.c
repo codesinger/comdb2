@@ -3241,7 +3241,7 @@ static int bind_parameters(struct reqlogger *logger, sqlite3_stmt *stmt,
             name = intspace;
             sprintf(name, "?%d", p.pos);
         }
-        else 
+        else
             name = p.name;
 
         if (p.null || p.type == COMDB2_NULL_TYPE) {
@@ -3579,6 +3579,7 @@ void run_stmt_setup(struct sqlclntstate *clnt, sqlite3_stmt *stmt)
     clnt->nsteps = 0;
     comdb2_set_sqlite_vdbe_tzname_int(v, clnt);
     comdb2_set_sqlite_vdbe_dtprec_int(v, clnt);
+    clnt->pTemporalParser = NULL; /* reset before step() */
 
 #ifdef DEBUG
     if (gbl_debug_sql_opcodes) {
@@ -4303,7 +4304,8 @@ check_version:
     }
 
     if (!thd->sqldb || (rc == SQLITE_SCHEMA_REMOTE)) {
-        /* need to refresh things; we need to grab views lock */
+        int new_sqldb = 0;
+       /* need to refresh things; we need to grab views lock */
         if (!got_views_lock) {
             unlock_schema_lk();
 
@@ -4347,6 +4349,7 @@ check_version:
                 abort();
             }
             thd->dbopen_gen = bdb_get_dbopen_gen();
+            new_sqldb = 1;
         }
 
         comdb2_reset_authstate(thd);
@@ -4367,6 +4370,9 @@ check_version:
 
             /* save the views generation number */
             thd->views_gen = gbl_views_gen;
+
+            void temporal_sqlite_update(sqlite3 * sqldb);
+            if (new_sqldb) temporal_sqlite_update(thd->sqldb);
         }
     }
  done: /* reached via goto for error handling case. */
@@ -4849,7 +4855,7 @@ static int send_heartbeat(struct sqlclntstate *clnt)
     return 0;
 }
 
-    
+
 /* timeradd() for struct timespec*/
 #define TIMESPEC_ADD(a, b, result)                                             \
     do {                                                                       \
@@ -5230,6 +5236,11 @@ void cleanup_clnt(struct sqlclntstate *clnt)
     destroy_hash(clnt->ddl_contexts, free_clnt_ddl_context);
     clnt->ddl_contexts = NULL;
 
+    if (clnt->pTemporal[0].pFrom) free(clnt->pTemporal[0].pFrom);
+    if (clnt->pTemporal[0].pTo) free(clnt->pTemporal[0].pTo);
+    if (clnt->pTemporal[1].pFrom) free(clnt->pTemporal[1].pFrom);
+    if (clnt->pTemporal[1].pTo) free(clnt->pTemporal[1].pTo);
+
     Pthread_mutex_destroy(&clnt->wait_mutex);
     Pthread_cond_destroy(&clnt->wait_cond);
     Pthread_mutex_destroy(&clnt->write_lock);
@@ -5388,6 +5399,23 @@ void reset_clnt(struct sqlclntstate *clnt, int initial)
     clnt->request_fp = 0;
     free(clnt->prev_cost_string);
     clnt->prev_cost_string = NULL;
+
+    if (clnt->pTemporal[0].pFrom) free(clnt->pTemporal[0].pFrom);
+    clnt->pTemporal[0].pFrom = NULL;
+    if (clnt->pTemporal[0].pTo) free(clnt->pTemporal[0].pTo);
+    clnt->pTemporal[0].pTo = NULL;
+    clnt->pTemporal[0].iIncl = 0;
+    clnt->pTemporal[0].iAll = 0;
+    clnt->pTemporal[0].iBus = 0;
+    if (clnt->pTemporal[1].pFrom) free(clnt->pTemporal[1].pFrom);
+    clnt->pTemporal[1].pFrom = NULL;
+    if (clnt->pTemporal[1].pTo) free(clnt->pTemporal[1].pTo);
+    clnt->pTemporal[1].pTo = NULL;
+    clnt->pTemporal[1].iIncl = 0;
+    clnt->pTemporal[1].iAll = 0;
+    clnt->pTemporal[1].iBus = 0;
+
+    clnt->pTemporalParser = NULL;
 
     if (gbl_sockbplog) {
         init_bplog_socket(clnt);
