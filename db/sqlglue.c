@@ -1077,8 +1077,9 @@ static int mem_to_ondisk(void *outbuf, struct field *f, struct mem_info *info,
             rc = CLIENT_to_SERVER(&val, sizeof(unsigned long long), CLIENT_INT,
                                   0, NULL, NULL, out + f->offset, f->len,
                                   f->type, 0, &outsz, &outopts, NULL);
-        } else
+        } else {
             set_null(out + f->offset, f->len);
+        }
 
         goto done;
     }
@@ -1875,6 +1876,22 @@ static int create_sqlmaster_record(struct dbtable *tbl, void *tran)
         return 0;
     }
 
+    /* fix history_db pointer here for replicants */
+    if (tbl->periods[PERIOD_SYSTEM].enable && tbl->history_db == NULL) {
+        char tmpname[MAXTABLELEN];
+        struct dbtable *history_db = NULL;
+        snprintf(tmpname, sizeof(tmpname), "%s_history", tbl->tablename);
+        history_db = get_dbtable_by_name(tmpname);
+        if (history_db) {
+            tbl->history_db = history_db;
+            history_db->is_history_table = 1;
+            history_db->orig_db = tbl;
+            logmsg(LOGMSG_INFO,
+                   "'%s' is temporal table and history table is '%s'\n",
+                   tbl->tablename, history_db->tablename);
+        }
+    }
+
     strbuf *sql = strbuf_new();
     strbuf_clear(sql);
     strbuf_appendf(sql, "create table \"%s\"(", tablename);
@@ -2515,11 +2532,11 @@ static int cursor_move_preprop(BtCursor *pCur, int *pRes, int how, int *done)
                       get_analyze_abort_requested() ||
                       db_is_exiting())) {
         if (inprogress)
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "%s: Aborting Analyze because schema_change_in_progress\n",
                     __func__);
         if (get_analyze_abort_requested())
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "%s: Aborting Analyze because of send analyze abort\n",
                     __func__);
         if (db_is_exiting())
@@ -3966,7 +3983,7 @@ int sqlite3BtreeDelete(BtCursor *pCur, int usage)
                 clnt, pCur->bt->fdb, (char *)tid, 0 /*TODO*/);
 
             if (!trans) {
-                logmsg(LOGMSG_ERROR, 
+                logmsg(LOGMSG_ERROR,
                         "%s:%d failed to create or join distributed transaction!\n",
                        __func__, __LINE__);
                 return SQLITE_INTERNAL;
@@ -4767,6 +4784,7 @@ int start_new_transaction(struct sqlclntstate *clnt, struct sql_thread *thd)
     }
 
     get_current_lsn(clnt);
+    clock_gettime(CLOCK_REALTIME, &(clnt->tstart));
 
     if (clnt->ctrl_sqlengine == SQLENG_STRT_STATE)
         sql_set_sqlengine_state(clnt, __FILE__, __LINE__, SQLENG_INTRANS_STATE);
@@ -5754,7 +5772,7 @@ int sqlite3BtreeMovetoUnpacked(BtCursor *pCur, /* The cursor to be moved */
         /* this is a find in a sqlite_master, ignore for now
         */
         if (pCur->keyDdl != intKey) {
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                 "%s: cached ddl row different than lookup row %llx %llx???\n",
                 __func__, pCur->genid, intKey);
         }
@@ -5852,7 +5870,7 @@ int sqlite3BtreeMovetoUnpacked(BtCursor *pCur, /* The cursor to be moved */
         if (is_genid_synthetic(genid)) {
             rc = osql_get_shadowdata(pCur, genid, &buf, &fndlen, &bdberr);
             if (rc) {
-                logmsg(LOGMSG_ERROR, 
+                logmsg(LOGMSG_ERROR,
                         "%s: error fetching shadow data for genid %llu\n",
                         __func__, genid);
             }
@@ -5921,7 +5939,7 @@ int sqlite3BtreeMovetoUnpacked(BtCursor *pCur, /* The cursor to be moved */
                     thd->clnt->ctrl_sqlengine == SQLENG_INTRANS_STATE) {
                     rc = osql_record_genid(pCur, thd, pCur->genid);
                     if (rc) {
-                        logmsg(LOGMSG_ERROR, 
+                        logmsg(LOGMSG_ERROR,
                                 "%s: failed to record genid %llx (%llu)\n",
                                 __func__, pCur->genid, pCur->genid);
                     }
@@ -5989,7 +6007,7 @@ int sqlite3BtreeMovetoUnpacked(BtCursor *pCur, /* The cursor to be moved */
                otherwise use the actual key */
             if(thd->crtshard>1) {
                 /*adjust left */
-                if(sqlite3RecordCompareExprList(pIdxKey, 
+                if(sqlite3RecordCompareExprList(pIdxKey,
                             &shards->mems[thd->crtshard-2]) < 0) {
                     /* replace pIdxKey with shards->mems */
                     /* THIS IS HACK! leaks and crashes
@@ -5998,12 +6016,12 @@ int sqlite3BtreeMovetoUnpacked(BtCursor *pCur, /* The cursor to be moved */
             }
             if(thd->crtshard-1 < shards->limits->nExpr) {
                 /*adjust right */
-                if(sqlite3RecordCompareExprList(pIdxKey, 
+                if(sqlite3RecordCompareExprList(pIdxKey,
                             &shards->mems[thd->crtshard-1])>=0) {
                     /* the result is eof */
                 }
             }
-            
+
         }
 #endif
         ondisk_len = rc =
@@ -6150,7 +6168,7 @@ int sqlite3BtreeMovetoUnpacked(BtCursor *pCur, /* The cursor to be moved */
                     thd->clnt->ctrl_sqlengine == SQLENG_INTRANS_STATE) {
                     rc = osql_record_genid(pCur, thd, pCur->genid);
                     if (rc) {
-                        logmsg(LOGMSG_ERROR, 
+                        logmsg(LOGMSG_ERROR,
                                 "%s: failed to record genid %llx (%llu)\n",
                                 __func__, pCur->genid, pCur->genid);
                     }
@@ -6612,7 +6630,7 @@ int sqlite3BtreeClearTable(Btree *pBt, int iTable, int *pnChange)
         }
         rc = bdb_temp_table_truncate(thedb->bdb_env, pTbl->tbl, &bdberr);
         if (rc) {
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "sqlite3BtreeClearTable: bdb_temp_table_clear error rc = %d\n",
                     rc);
             rc = SQLITE_INTERNAL;
@@ -6760,9 +6778,9 @@ again:
         goto again;
     }
 
-#if 0 
+#if 0
    int patch = 0;
-   if (is_genid_synthetic(pCur->genid)) 
+   if (is_genid_synthetic(pCur->genid))
    {
       patch = blobnum-1;
    }
@@ -7763,11 +7781,11 @@ static int sqlite3LockStmtTables_int(sqlite3_stmt *pStmt, int after_recovery)
          * A sqlite engine can safely access a dbtable once it acquires the read lock
          * for the table. This is done under schema change lock, and after that the
          * table cannot be dropped or altered until the read lock is released.
-         * 
-         * In a normal case, for each statement, the table read locks are acquired under the 
+         *
+         * In a normal case, for each statement, the table read locks are acquired under the
          * curtran locker id, and are released when the statement execution is over,
-         * just before closing the curtran.  * This protects the table for the duration 
-         * of statement's execution.  This is different in chunk transaction, as explained below.  
+         * just before closing the curtran.  * This protects the table for the duration
+         * of statement's execution.  This is different in chunk transaction, as explained below.
          *
          * For client transactions ("begin";write_table1;write_table2;commit"), after write_table1
          * is done, "table1" can be altered or even dropped by a concurrent schema change.
@@ -7778,9 +7796,9 @@ static int sqlite3LockStmtTables_int(sqlite3_stmt *pStmt, int after_recovery)
          * if table is schema changed after "write_table1_once" finishes, the snapshot is broken
          * and we need to fail the transaction.
          *
-         * In transaction chunk mode, during a single statement execution we release the table locks 
+         * In transaction chunk mode, during a single statement execution we release the table locks
          * once the chunk is committed. This allows the table to be dropped/altered concurrently
-         * with sqlite statement execution.  In order to continue sqlite execution safely 
+         * with sqlite statement execution.  In order to continue sqlite execution safely
          * (next chunk), we need to reacquire the table locks.  We also need to make sure the
          * table was not changed (altered or drop&add).
          */
@@ -7887,7 +7905,7 @@ static int sqlite3LockStmtTables_int(sqlite3_stmt *pStmt, int after_recovery)
                 clnt->dbtran.nLockedRemTables =
                     nRemoteTables; /* we only grabbed that many locks so far */
 
-                logmsg(LOGMSG_ERROR, 
+                logmsg(LOGMSG_ERROR,
                        "Failed to lock remote table cache for \"%s\" rootp %d\n",
                        tab->zName, iTable);
 
@@ -8698,7 +8716,7 @@ static int chunk_transaction(BtCursor *pCur, struct sqlclntstate *clnt,
         }
 
         if (!commit_rc) {
-            /* NOTE: the commit has released the curtran locks, so 
+            /* NOTE: the commit has released the curtran locks, so
              * the table can go away. We cannot keep the table locks here
              * since it deadlocks on the master (the writer lock starvation
              * prevents a new read table lock to be aquired while there is
@@ -8836,7 +8854,7 @@ int sqlite3BtreeInsert(
         if (rec != NULL) sqlite3DbFree(pCur->pKeyInfo->db, rec);
 
         if (rc) {
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                    "sqlite3BtreeInsert:  table insert error rc = %d bdberr %d\n",
                    rc, bdberr);
             rc = SQLITE_INTERNAL;
@@ -8898,7 +8916,7 @@ int sqlite3BtreeInsert(
 
         /* sanity check, this should never happen */
         if (!is_sql_update_mode(clnt->dbtran.mode)) {
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "%s: calling insert/update in the wrong sql mode %d\n",
                     __func__, clnt->dbtran.mode);
             rc = UNIMPLEMENTED;
@@ -8986,6 +9004,16 @@ int sqlite3BtreeInsert(
                 rc = SQLITE_ERROR;
                 goto done;
             }
+
+            int temporal_business_time_check(struct dbtable *db, uint8_t * od_dta);
+            rc = temporal_business_time_check(pCur->db, pCur->ondisk_buf);
+            if (rc) {
+                sqlite3VdbeError(pCur->vdbe, "Invalid parameter: business "
+                                             "start time must be less than "
+                                             "business end time");
+                rc = SQLITE_ERROR;
+                goto done;
+            }
         }
 
         /* If it's a known invalid genid (see sqlite3BtreeNewRowid() for
@@ -9050,7 +9078,7 @@ int sqlite3BtreeInsert(
                 clnt, pCur->bt->fdb, (char *)tid, 0 /*TODO*/);
 
             if (!trans) {
-                logmsg(LOGMSG_ERROR, 
+                logmsg(LOGMSG_ERROR,
                        "%s:%d failed to create or join distributed transaction!\n",
                        __func__, __LINE__);
                 return SQLITE_INTERNAL;
@@ -9095,7 +9123,7 @@ done:
 }
 
 /*
-** Advance the cursor to the next entry in the database. 
+** Advance the cursor to the next entry in the database.
 ** Return value:
 **
 **    SQLITE_OK        success
@@ -9871,7 +9899,7 @@ static int recover_deadlock_flags_int(bdb_state_type *bdb_state,
     assert(bdb_lockref() == 0);
     if (rc) {
         if (bdb_attr_get(thedb->bdb_attr, BDB_ATTR_DURABLE_LSNS)) {
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                     "%s: fail to put curtran, rc=%d, return changenode\n",
                     __func__, rc);
             return SQLITE_CLIENT_CHANGENODE;
@@ -10613,7 +10641,7 @@ int sqlglue_release_genid(unsigned long long genid, int *bdberr)
         }
         Pthread_mutex_unlock(&thd->lk);
     } else {
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "%s wow, someone forgot to set query_info_key pthread key!\n",
                 __func__);
         *bdberr = BDBERR_BUG_KILLME;
@@ -10811,7 +10839,7 @@ int sqlite3BtreeCount(BtCursor *pCur, i64 *pnEntry)
                     thd->clnt->ctrl_sqlengine == SQLENG_INTRANS_STATE) {
                     rc = osql_record_genid(pCur, thd, pCur->genid);
                     if (rc) {
-                        logmsg(LOGMSG_ERROR, 
+                        logmsg(LOGMSG_ERROR,
                                 "%s: failed to record genid %llx (%llu)\n",
                                 __func__, pCur->genid, pCur->genid);
                     }
@@ -10956,7 +10984,7 @@ Pager *sqlite3BtreePager(Btree *p) { return NULL; }
 
 /*
 ** Return an estimate for the number of rows in the table that pCur is
-** pointing to.  Return a negative number if no estimate is currently 
+** pointing to.  Return a negative number if no estimate is currently
 ** available.
 */
 i64 sqlite3BtreeRowCountEst(BtCursor *pCur){ return -1; }
@@ -11167,6 +11195,63 @@ int is_comdb2_index_blob(const char *dbname, int icol)
         }
     }
     return 0;
+}
+
+int is_comdb2_column_temporal(const char *dbname, const char *colname)
+{
+    struct dbtable *db = get_dbtable_by_name(dbname);
+    struct schema *schema;
+    if (db == NULL) return 0;
+    schema = db->schema;
+    if (db->periods[PERIOD_SYSTEM].enable) {
+        if (strcmp(schema->member[db->periods[PERIOD_SYSTEM].start].name,
+                   colname) == 0)
+            return COLTIME_SYSSTART;
+        if (strcmp(schema->member[db->periods[PERIOD_SYSTEM].end].name,
+                   colname) == 0)
+            return COLTIME_SYSEND;
+    }
+    if (db->periods[PERIOD_BUSINESS].enable) {
+        if (strcmp(schema->member[db->periods[PERIOD_BUSINESS].start].name,
+                   colname) == 0)
+            return COLTIME_BUSSTART;
+        if (strcmp(schema->member[db->periods[PERIOD_BUSINESS].end].name,
+                   colname) == 0)
+            return COLTIME_BUSEND;
+    }
+    if (db->is_history_table) {
+        db = db->orig_db;
+        schema = db->schema;
+        /* end time of history record is same as start time of new record */
+        if (strcmp(schema->member[db->periods[PERIOD_SYSTEM].end].name,
+                   colname) == 0)
+            return COLTIME_SYSSTART;
+    }
+    return 0;
+}
+
+/* return true if table is temporal (current or history) */
+int is_comdb2_temporal_table(const char *tbl, char **start, char **end, int pd)
+{
+    struct dbtable *db = get_dbtable_by_name(tbl);
+    struct schema *schema;
+    if (db == NULL) return 0;
+    assert(pd < PERIOD_MAX);
+    schema = db->schema;
+    if (db->periods[pd].enable) {
+        if (start) *start = schema->member[db->periods[pd].start].name;
+        if (end) *end = schema->member[db->periods[pd].end].name;
+        return 1;
+    }
+    return 0;
+}
+
+/* return true if table is a history table */
+int is_comdb2_history_table(const char *dbname)
+{
+    struct dbtable *db = get_dbtable_by_name(dbname);
+    if (db == NULL) return 0;
+    return db->is_history_table;
 }
 
 void comdb2SetWriteFlag(int wrflag)
@@ -11887,10 +11972,10 @@ int bt_hash_table(char *table, int szkb)
     trans_commit(&iq, tran, gbl_myhostname);
 
     // scdone log
-    rc = bdb_llog_scdone(bdb_state, bthash, bdb_state->name, 
+    rc = bdb_llog_scdone(bdb_state, bthash, bdb_state->name,
                          strlen(bdb_state->name) + 1, 1, &bdberr);
     if (rc || bdberr != BDBERR_NOERROR) {
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "Failed to send logical log scdone bthash rc=%d bdberr=%d\n",
                 rc, bdberr);
         return -1;
@@ -13188,4 +13273,413 @@ int comdb2_is_field_indexable(const char *table_name, int fld_idx) {
         }
     }
     return 1;
+}
+
+void comdb2_get_temporal_opt(char **from, char **to, int *incl, int *all,
+                             int isBus, void *pCaller)
+{
+    struct sql_thread *thd = pthread_getspecific(query_info_key);
+    struct sqlclntstate *clnt = thd->clnt;
+    if (isBus)
+        isBus = 1;
+    else
+        isBus = 0;
+
+    if (thd) {
+        if (clnt->pTemporalParser && clnt->pTemporalParser != pCaller) return;
+        *from = clnt->pTemporal[isBus].pFrom;
+        *to = clnt->pTemporal[isBus].pTo;
+        *incl = clnt->pTemporal[isBus].iIncl;
+        *all = clnt->pTemporal[isBus].iAll;
+        clnt->pTemporalParser = pCaller;
+    }
+}
+
+/* Write transaction start time to pMem */
+int comdb2_temporal_systime_start(Mem *pMem)
+{
+    struct sql_thread *thd = pthread_getspecific(query_info_key);
+    struct sqlclntstate *clnt = thd->clnt;
+    dttz_t dt;
+    bzero(&dt, sizeof(dttz_t));
+    timespec_to_dttz(&(clnt->tstart), &dt, DTTZ_PREC_USEC);
+    bzero(pMem, sizeof(Mem));
+    sqlite3VdbeMemSetDatetime(pMem, &dt, NULL);
+    return SQLITE_OK;
+}
+
+/* Write NULL to pMem */
+int comdb2_temporal_systime_end(Mem *pMem)
+{
+    bzero(pMem, sizeof(Mem));
+    pMem->flags = MEM_Null;
+    return SQLITE_OK;
+}
+
+/* Check if pMem is greater than table's start time */
+int comdb2_temporal_systime_check(Vdbe *v, const char *dbname, Mem *pMem)
+{
+    dttz_t dt;
+    struct dbtable *db = get_dbtable_by_name(dbname);
+    assert(db->periods[PERIOD_SYSTEM].enable);
+    bzero(&dt, sizeof(dttz_t));
+    timespec_to_dttz(&(db->history_db->tstart), &dt, DTTZ_PREC_USEC);
+    if (dt.dttz_sec > pMem->du.dt.dttz_sec ||
+        (dt.dttz_sec == pMem->du.dt.dttz_sec &&
+         dt.dttz_frac > pMem->du.dt.dttz_frac)) {
+        char timestr[64] = {0};
+        char timestr2[64] = {0};
+        int outdtsz;
+        dttz_to_str(&dt, timestr, 64, &outdtsz, pMem->tz);
+        dttz_to_str(&(pMem->du.dt), timestr2, 64, &outdtsz, pMem->tz);
+        sqlite3VdbeError(v, "Invalid parameter: table '%s' was not valid until "
+                            "'%s', given '%s'",
+                         dbname, timestr, timestr2);
+        return SQLITE_ERROR;
+    }
+    return SQLITE_OK;
+}
+
+/* Override the start time and end time of an ondisk record,
+ * use lower NULL or iq->tstart as the start time and
+ * use higher NULL as the end time
+*/
+int temporal_overwrite_systime(struct ireq *iq, uint8_t *rec, int use_tstart)
+{
+    struct schema *sc = iq->usedb->schema;
+    int fldidx;
+    struct field *f;
+
+    assert(iq->usedb->periods[PERIOD_SYSTEM].enable);
+
+    fldidx = iq->usedb->periods[PERIOD_SYSTEM].start;
+    f = &(sc->member[fldidx]);
+    if (!use_tstart) {
+        set_null(rec + f->offset, f->len);
+        memset(rec + f->offset, 0, f->len);
+        set_null_low(rec + f->offset, f->len);
+    } else {
+        int rc;
+        dttz_t dt;
+        Mem m;
+        int nblobs = 0;
+        struct field_conv_opts_tz convopts = {.flags = 0};
+        struct mem_info info;
+
+        timespec_to_dttz(&(iq->tstart), &dt, DTTZ_PREC_USEC);
+        bzero(&m, sizeof(Mem));
+        sqlite3VdbeMemSetDatetime(&m, &dt, NULL);
+
+        info.s = sc;
+        info.null = 0;
+        info.fail_reason = NULL;
+        info.tzname =
+            (iq->tzname && iq->tzname[0]) ? iq->tzname : "America/New_York";
+        info.m = &m;
+        info.nblobs = &nblobs;
+        info.convopts = &convopts;
+        info.outblob = NULL;
+        info.maxblobs = MAXBLOBS;
+        info.fldidx = fldidx;
+        rc = mem_to_ondisk(rec, f, &info, NULL);
+        if (rc) {
+            logmsg(LOGMSG_ERROR,
+                   "%s: failed to generate temporal history data\n", __func__);
+            return rc;
+        }
+    }
+
+    fldidx = iq->usedb->periods[PERIOD_SYSTEM].end;
+    f = &(sc->member[fldidx]);
+    memset(rec + f->offset, 0, f->len);
+    set_null_low(rec + f->offset, f->len);
+    set_null_high(rec + f->offset, f->len);
+
+#ifdef TEMPORAL_DEBUG
+    printf("%s: table %s\n", __func__, iq->usedb->tablename);
+    fsnapf(stdout, rec, getdatsize(iq->usedb));
+#endif
+
+    return 0;
+}
+
+int temporal_generate_history_data(struct ireq *iq, uint8_t *his_dta,
+                                   uint8_t *old_dta, uint8_t *od_dta,
+                                   size_t od_len)
+{
+    struct schema *sc = iq->usedb->schema;
+    struct field *fstart;
+    struct field *fend;
+    int rc;
+    dttz_t dt;
+    Mem m;
+    int nblobs = 0;
+    struct field_conv_opts_tz convopts = {.flags = 0};
+    struct mem_info info;
+
+    assert(iq->usedb->periods[PERIOD_SYSTEM].enable);
+    assert(old_dta);
+
+    memcpy(his_dta, old_dta, od_len);
+    if (od_dta) {
+        fstart = &(sc->member[iq->usedb->periods[PERIOD_SYSTEM].start]);
+        fend = &(sc->member[iq->usedb->periods[PERIOD_SYSTEM].end]);
+
+        memcpy(his_dta + fend->offset, od_dta + fstart->offset, fstart->len);
+    } else {
+        timespec_to_dttz(&(iq->tstart), &dt, DTTZ_PREC_USEC);
+        bzero(&m, sizeof(Mem));
+        sqlite3VdbeMemSetDatetime(&m, &dt, NULL);
+
+        info.s = sc;
+        info.null = 0;
+        info.fail_reason = NULL;
+        info.tzname =
+            (iq->tzname && iq->tzname[0]) ? iq->tzname : "America/New_York";
+        info.m = &m;
+        info.nblobs = &nblobs;
+        info.convopts = &convopts;
+        info.outblob = NULL;
+        info.maxblobs = MAXBLOBS;
+        info.fldidx = iq->usedb->periods[PERIOD_SYSTEM].end;
+        rc = mem_to_ondisk(his_dta, &(sc->member[info.fldidx]), &info, NULL);
+        if (rc) {
+            logmsg(LOGMSG_ERROR,
+                   "%s: failed to generate temporal history data\n", __func__);
+            return rc;
+        }
+    }
+
+    return 0;
+}
+
+int temporal_business_time_check(struct dbtable *db, uint8_t *od_dta)
+{
+    struct schema *sc = db->schema;
+    struct field *fstart;
+    struct field *fend;
+    int rc;
+    if (!db->periods[PERIOD_BUSINESS].enable) return 0;
+    fstart = &(sc->member[db->periods[PERIOD_BUSINESS].start]);
+    fend = &(sc->member[db->periods[PERIOD_BUSINESS].end]);
+    rc = memcmp(od_dta + fstart->offset, od_dta + fend->offset, fstart->len);
+    if (rc >= 0) {
+        if (stype_is_null(od_dta + fend->offset)) return 0;
+        return 1;
+    }
+    return 0;
+}
+
+static inline void create_systime_trigger_query(strbuf *sql, struct dbtable *db,
+                                                int is_update)
+{
+    struct schema *schema;
+    int field;
+    assert(db->periods[PERIOD_SYSTEM].enable);
+
+    strbuf_clear(sql);
+    schema = db->schema;
+
+    strbuf_append(sql, "create trigger \"");
+    strbuf_append(sql, db->tablename);
+    if (is_update)
+        strbuf_append(sql, "_systime_upd\" update on \"");
+    else
+        strbuf_append(sql, "_systime_del\" delete on \"");
+    strbuf_append(sql, db->tablename);
+    strbuf_append(sql, "\" begin ");
+    strbuf_append(sql, "insert into \"");
+    strbuf_append(sql, db->tablename);
+    strbuf_append(sql, "_history");
+    strbuf_append(sql, "\" (");
+    for (field = 0; field < schema->nmembers; field++) {
+        if (field == db->periods[PERIOD_SYSTEM].end) {
+            if (field != schema->nmembers - 1) strbuf_append(sql, ", ");
+            continue;
+        }
+        strbuf_append(sql, "\"");
+        strbuf_append(sql, schema->member[field].name);
+        strbuf_append(sql, "\"");
+        if (field != schema->nmembers - 1 &&
+            field + 1 != db->periods[PERIOD_SYSTEM].end)
+            strbuf_append(sql, ", ");
+    }
+    strbuf_append(sql, ") values (");
+    schema = db->schema;
+    for (field = 0; field < schema->nmembers; field++) {
+        if (field == db->periods[PERIOD_SYSTEM].end) {
+            if (field != schema->nmembers - 1) strbuf_append(sql, ", ");
+            continue;
+        }
+        strbuf_append(sql, "old.\"");
+        strbuf_append(sql, schema->member[field].name);
+        strbuf_append(sql, "\"");
+        if (field != schema->nmembers - 1 &&
+            field + 1 != db->periods[PERIOD_SYSTEM].end)
+            strbuf_append(sql, ", ");
+    }
+    strbuf_append(sql, "); end;");
+}
+
+static inline void create_systime_view_query(strbuf *sql, struct dbtable *db)
+{
+    assert(db->periods[PERIOD_SYSTEM].enable);
+    strbuf_clear(sql);
+    strbuf_append(sql, "create view \"");
+    strbuf_append(sql, db->tablename);
+    strbuf_append(sql, "_systime\" as ");
+    strbuf_append(sql, "select * from ");
+    strbuf_append(sql, "\"");
+    strbuf_append(sql, db->tablename);
+    strbuf_append(sql, "\"");
+    strbuf_append(sql, " union all ");
+    strbuf_append(sql, "select * from ");
+    strbuf_append(sql, "\"");
+    strbuf_append(sql, db->tablename);
+    strbuf_append(sql, "_history");
+    strbuf_append(sql, "\"");
+    strbuf_append(sql, ";");
+}
+
+static inline void create_bustime_trigger_query(strbuf *sql, struct dbtable *db)
+{
+    struct schema *schema;
+    int field;
+    int fstart, fend;
+    assert(db->periods[PERIOD_BUSINESS].enable);
+
+    fstart = db->periods[PERIOD_BUSINESS].start;
+    fend = db->periods[PERIOD_BUSINESS].end;
+
+    strbuf_clear(sql);
+    schema = db->schema;
+
+    strbuf_append(sql, "create trigger \"");
+    strbuf_append(sql, db->tablename);
+    strbuf_append(sql, "_bustime\" business_time on \"");
+    strbuf_append(sql, db->tablename);
+    strbuf_append(sql, "\" when ");
+    strbuf_append(sql, "(old.\"");
+    strbuf_append(sql, schema->member[fstart].name);
+    strbuf_append(sql, "\" < new.\"");
+    strbuf_append(sql, schema->member[fstart].name);
+    strbuf_append(sql, "\" or ");
+    strbuf_append(sql, "old.\"");
+    strbuf_append(sql, schema->member[fstart].name);
+    strbuf_append(sql, "\" is null) and ");
+    strbuf_append(sql, "(old.\"");
+    strbuf_append(sql, schema->member[fend].name);
+    strbuf_append(sql, "\" > new.\"");
+    strbuf_append(sql, schema->member[fend].name);
+    strbuf_append(sql, "\" or ");
+    strbuf_append(sql, "old.\"");
+    strbuf_append(sql, schema->member[fend].name);
+    strbuf_append(sql, "\" is null)");
+    strbuf_append(sql, " begin ");
+    strbuf_append(sql, "insert into \"");
+    strbuf_append(sql, db->tablename);
+    strbuf_append(sql, "\" values (");
+    schema = db->schema;
+    for (field = 0; field < schema->nmembers; field++) {
+        strbuf_append(sql, "old.\"");
+        strbuf_append(sql, schema->member[field].name);
+        strbuf_append(sql, "\"");
+        if (field != schema->nmembers - 1) strbuf_append(sql, ", ");
+    }
+    strbuf_append(sql, "); end;");
+}
+
+void temporal_sqlite_update(sqlite3 *sqldb)
+{
+    int rc = 0;
+    int i;
+    struct dbtable *db;
+    char *errstr = NULL;
+    strbuf *sql;
+    extern pthread_rwlock_t thedb_lock;
+
+    sql = strbuf_new();
+    strbuf_clear(sql);
+
+    pthread_rwlock_rdlock(&thedb_lock);
+
+    for (i = 0; i < thedb->num_dbs; i++) {
+        db = thedb->dbs[i];
+        if (db->periods[PERIOD_SYSTEM].enable) {
+            strbuf_clear(sql);
+            strbuf_append(sql, "drop view if exists \"");
+            strbuf_append(sql, db->tablename);
+            strbuf_append(sql, "_systime\";");
+            if (rc != SQLITE_OK) {
+                logmsg(LOGMSG_FATAL, "%s: temporal table error \"%s\"\n",
+                       __func__, errstr);
+                abort();
+            }
+
+            create_systime_view_query(sql, db);
+            rc = sqlite3_exec(sqldb, strbuf_buf(sql), NULL, NULL, &errstr);
+            if (rc != SQLITE_OK) {
+                logmsg(LOGMSG_FATAL, "%s: temporal table error \"%s\"\n",
+                       __func__, errstr);
+                abort();
+            }
+
+            strbuf_clear(sql);
+            strbuf_append(sql, "drop trigger if exists \"");
+            strbuf_append(sql, db->tablename);
+            strbuf_append(sql, "_systime_upd\";");
+            if (rc != SQLITE_OK) {
+                logmsg(LOGMSG_FATAL, "%s: temporal table error \"%s\"\n",
+                       __func__, errstr);
+                abort();
+            }
+
+            create_systime_trigger_query(sql, db, 1);
+            rc = sqlite3_exec(sqldb, strbuf_buf(sql), NULL, NULL, &errstr);
+            if (rc != SQLITE_OK) {
+                logmsg(LOGMSG_FATAL, "%s: temporal table error \"%s\"\n",
+                       __func__, errstr);
+                abort();
+            }
+
+            strbuf_clear(sql);
+            strbuf_append(sql, "drop trigger if exists \"");
+            strbuf_append(sql, db->tablename);
+            strbuf_append(sql, "_systime_del\";");
+            if (rc != SQLITE_OK) {
+                logmsg(LOGMSG_FATAL, "%s: temporal table error \"%s\"\n",
+                       __func__, errstr);
+                abort();
+            }
+
+            create_systime_trigger_query(sql, db, 0);
+            rc = sqlite3_exec(sqldb, strbuf_buf(sql), NULL, NULL, &errstr);
+            if (rc != SQLITE_OK) {
+                logmsg(LOGMSG_FATAL, "%s: temporal table error \"%s\"\n",
+                       __func__, errstr);
+                abort();
+            }
+        }
+        if (db->periods[PERIOD_BUSINESS].enable) {
+            strbuf_clear(sql);
+            strbuf_append(sql, "drop trigger if exists \"");
+            strbuf_append(sql, db->tablename);
+            strbuf_append(sql, "_bustime\";");
+            if (rc != SQLITE_OK) {
+                logmsg(LOGMSG_FATAL, "%s: temporal table error \"%s\"\n",
+                       __func__, errstr);
+                abort();
+            }
+
+            create_bustime_trigger_query(sql, db);
+            rc = sqlite3_exec(sqldb, strbuf_buf(sql), NULL, NULL, &errstr);
+            if (rc != SQLITE_OK) {
+                logmsg(LOGMSG_FATAL, "%s: temporal table error \"%s\"\n",
+                       __func__, errstr);
+                abort();
+            }
+        }
+    }
+
+    pthread_rwlock_unlock(&thedb_lock);
 }
