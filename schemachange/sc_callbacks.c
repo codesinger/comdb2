@@ -274,7 +274,8 @@ int live_sc_post_update_delayed_key_adds_int(struct ireq *iq, void *trans,
         rc =
             save_old_blobs(iq, trans, ".ONDISK", od_dta, 2, newgenid, oldblobs);
         if (rc) {
-            fprintf(stderr, "%s() save old blobs failed rc %d\n", __func__, rc);
+            logmsg(LOGMSG_ERROR, "%s() save old blobs failed rc %d\n", __func__,
+                   rc);
             return rc;
         }
         blob_status_to_blob_buffer(oldblobs, add_blobs_buf);
@@ -368,6 +369,21 @@ int live_sc_post_add_record(struct ireq *iq, void *trans,
         MEMORY_SYNC;
         rc = 0;
         goto done; // should just fail SC
+    }
+
+    if (usedb->sc_to->overwrite_systime) {
+        int temporal_overwrite_systime(struct ireq * iq, uint8_t * rec,
+                                       int use_tstart);
+        rc = temporal_overwrite_systime(iq, new_dta, 0);
+        if (rc) {
+            logmsg(LOGMSG_ERROR,
+                   "%s: temporal_overwrite_systime table %s failed\n", __func__,
+                   iq->usedb->sc_to->tablename);
+        usedb->sc_abort = 1;
+        MEMORY_SYNC;
+        rc = 0;
+        goto done; // should just fail SC
+        }
     }
 
     ins_keys = revalidate_new_indexes(iq, usedb->sc_to, new_dta, ins_keys,
@@ -519,7 +535,7 @@ void sc_del_unused_files_tran(struct dbtable *db, tran_type *tran)
 
     if (bdb_attr_get(thedb->bdb_attr, BDB_ATTR_DELAYED_OLDFILE_CLEANUP)) {
         if (bdb_list_unused_files_tran(
-                db->handle, tran, &bdberr, 
+                db->handle, tran, &bdberr,
                 "schemachange") || bdberr != BDBERR_NOERROR)
             logmsg(LOGMSG_WARN, "%s: errors listing old files\n", __func__);
     } else {
