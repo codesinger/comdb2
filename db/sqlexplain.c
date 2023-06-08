@@ -114,8 +114,8 @@ static void print_field(Vdbe *v, struct cursor_info *cinfo, int num, char *buf)
         }
         sprintf(buf, "\"%s\"", indexname);
         return;
-    } 
-    
+    }
+
     struct dbtable *db = NULL;
     if (cinfo->tbl < thedb->num_dbs) {
         assert(cinfo->tbl >= 0);
@@ -577,6 +577,14 @@ void get_one_explain_line(sqlite3 *hndl, strbuf *out, Vdbe *v, int indent,
                             "by the OP_MakeRecord, do not free prev val",
                        op->p2);
         break;
+    case OP_SystimeStart:
+        strbuf_appendf(out, "R%d = SystemStart()", op->p2);
+        break;
+    case OP_SystimeEnd: strbuf_appendf(out, "R%d = SystemEnd()", op->p2); break;
+    case OP_SystimeCheck:
+        strbuf_appendf(out, "Check if R%d >= table '%s' start time", op->p1,
+                       op->p4.z);
+        break;
     case OP_Blob: {
         strbuf_appendf(out, "R%d = x'", op->p2);
         for (int i = 0; i < op->p1; ++i) {
@@ -655,6 +663,10 @@ void get_one_explain_line(sqlite3 *hndl, strbuf *out, Vdbe *v, int indent,
         break;
     case OP_MustBeInt:
         strbuf_appendf(out, "Goto %d if conversion of R%d to integer fails",
+                       op->p2, op->p1);
+        break;
+    case OP_MustBeDatetime:
+        strbuf_appendf(out, "Goto %d if conversion of R%d to datetime fails",
                        op->p2, op->p1);
         break;
     case OP_RealAffinity:
@@ -1141,6 +1153,9 @@ void get_one_explain_line(sqlite3 *hndl, strbuf *out, Vdbe *v, int indent,
             strbuf_append(out, ")");
         }
         break;
+    case OP_SequenceTest:
+        strbuf_appendf(out, "if( cursor[%d].ctr++ ) pc = %d", op->p1, op->p2);
+        break;
     case OP_SorterInsert:
         strbuf_appendf(out, "Write key in R%d into ", op->p2);
         strbuf_appendf(out, "sorter table using cursor [%d]", op->p1);
@@ -1262,7 +1277,7 @@ int newsql_dump_query_plan(struct sqlclntstate *clnt, sqlite3 *hndl)
                                             (const char **)&eos);
     if( newSql ) sqlite3_free(newSql);
     sqlite3WhereTrace = 0;
-    if (f) 
+    if (f)
         io_override_set_std(NULL);
     if (rc || !stmt) {
         char * errstr = (char *)sqlite3_errmsg(hndl);
@@ -1323,4 +1338,3 @@ int newsql_dump_query_plan(struct sqlclntstate *clnt, sqlite3 *hndl)
     write_response(clnt, RESPONSE_ROW_LAST, NULL, 0);
     return 0;
 }
-
