@@ -676,7 +676,7 @@ int server_type_to_client_type_len(int type, int inlen, int *client_type,
     if (gothit) {
         return 0;
     } else {
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "server_type_to_client_type_len: type=%d len=%d error\n", type,
                 inlen);
         return -1;
@@ -820,7 +820,7 @@ int server_type_to_csc2_type_len(int type, int inlen, int *csc2type,
     if (gothit) {
         return 0;
     } else {
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "server_type_to_csc2_type_len type=%d len=%d error\n",
                 type, inlen);
         return -1;
@@ -1513,7 +1513,7 @@ int clone_server_to_client_tag(const char *table, const char *fromtag,
         if (rc != 0) {
             int i;
 
-            logmsg(LOGMSG_ERROR, 
+            logmsg(LOGMSG_ERROR,
                    "clone_server_to_client_tag: severe error - returning\n");
             for (i = 0; i <= field; i++) {
                 free(to->member[i].name);
@@ -2146,7 +2146,7 @@ static int ctag_to_stag_int(const char *table, const char *ctag,
                     }
                     return -1;
                 } else if (gbl_check_client_tags == 2) {
-                    logmsg(LOGMSG_WARN, 
+                    logmsg(LOGMSG_WARN,
                             "WARNING: THIS DATABASE RECEIVED CLIENT "
                             "TAG '%s' WITH\n"
                             "FIELD '%s' WHICH IS NOT IN SERVER TAG '%s'\n",
@@ -3109,7 +3109,7 @@ int stag_to_ctag_buf_blobs_tz(const char *table, const char *stag,
 }
 #if 0
 int stag_to_ctag_buf_blobs_tz(const char *table, const char *stag, char *inbuf,
-        int len, const char *ctag, void *outbufp, unsigned char *outnulls, 
+        int len, const char *ctag, void *outbufp, unsigned char *outnulls,
         int flags, void * flddtsz, int * flddtlen,
         blob_buffer_t *blobs, int maxblobs, const char *tzname)
 {
@@ -3121,8 +3121,8 @@ int stag_to_ctag_buf_blobs_tz(const char *table, const char *stag, char *inbuf,
       return -1;
    }
    bzero(newblobs, sizeof(newblobs));
-    rc = _stag_to_ctag_buf(table, stag, inbuf, len, ctag, outbufp, outnulls, 
-            flags, pp_flddtsz, p_flddtsz_end, blobs, newblobs, maxblobs, 
+    rc = _stag_to_ctag_buf(table, stag, inbuf, len, ctag, outbufp, outnulls,
+            flags, pp_flddtsz, p_flddtsz_end, blobs, newblobs, maxblobs,
             tzname);
    free_blob_buffers(blobs, maxblobs);
    if(rc < 0)
@@ -3962,6 +3962,7 @@ static int default_cmp(int oldlen, const void *oldptr, int newlen,
  *   3. NULL attribute removed from field
  *   4. field size reduced
  *   5. field deleted
+ *   6. enable system versioning
  * SC_BAD_NEW_FIELD: New field missing dbstore or null
  * SC_BAD_DBPAD: Byte array size changed and missing dbpad
  * SC_COLUMN_ADDED: If new column is added
@@ -3974,6 +3975,9 @@ int compare_tag_int(struct schema *old, struct schema *new, FILE *out,
     int change = SC_NO_CHANGE;
     int oidx, nidx;
 
+    if (!old->periods[PERIOD_SYSTEM].enable &&
+        new->periods[PERIOD_SYSTEM].enable)
+        return SC_TAG_CHANGE;
     /* Find changes to old fields */
     for (oidx = 0; oidx < old->nmembers; ++oidx) {
         char buf[256] = "";
@@ -4192,7 +4196,9 @@ int compare_tag_int(struct schema *old, struct schema *new, FILE *out,
                             old->tag, nidx, fnew->name);
                 }
                 break;
-            } else if (allow_null || (fnew->in_default && fnew->in_default_type != SERVER_SEQUENCE)) {
+            } else if (allow_null ||
+                       (fnew->in_default && fnew->in_default_type != SERVER_SEQUENCE) ||
+                       fnew->flags & MEMBER_PERIOD_MASK) {
                 rc = SC_COLUMN_ADDED;
                 if (out) {
                     logmsg(LOGMSG_INFO, "tag %s has new field %d (named %s)\n",
@@ -4598,7 +4604,7 @@ void fix_lrl_ixlen_tran(tran_type *tran)
                                    &db->csc2_schema_len, tran);
             }
         } else {
-            if (!db->csc2_schema)  
+            if (!db->csc2_schema)
                 db->csc2_schema = load_text_file(db->lrlfname);
             if (db->csc2_schema)
                 db->csc2_schema_len = strlen(db->csc2_schema);
@@ -5353,7 +5359,7 @@ struct schema *clone_schema_index(struct schema *from, int table_nmembers)
     if (from->partial_datacopy) {
         sc->partial_datacopy = clone_schema(from->partial_datacopy);
         table_nmembers = sc->partial_datacopy->nmembers; // update number of members in datacopy
-    } 
+    }
     if (from->datacopy) {
         assert(table_nmembers != -1);
         sc->datacopy = malloc(table_nmembers * sizeof(int));
@@ -5398,7 +5404,7 @@ void commit_schemas(const char *tblname)
             oldname = sc->tag;
             newname = strdup(sc->tag + 5);
             if (!newname) {
-                logmsg(LOGMSG_FATAL, 
+                logmsg(LOGMSG_FATAL,
                         "commit_schemas: out of memory on strdup tag\n");
                 exit(1);
             }
@@ -5409,7 +5415,7 @@ void commit_schemas(const char *tblname)
                 oldname = sc->csctag;
                 newname = strdup(sc->csctag + 5);
                 if (!newname) {
-                    logmsg(LOGMSG_FATAL, 
+                    logmsg(LOGMSG_FATAL,
                             "commit_schemas: out of memory on strdup tag\n");
                     exit(1);
                 }
@@ -5423,7 +5429,7 @@ void commit_schemas(const char *tblname)
                     struct schema *ver_schema = NULL;
                     char *newname = malloc(gbl_ondisk_ver_len);
                     if (newname == NULL) {
-                        logmsg(LOGMSG_FATAL, 
+                        logmsg(LOGMSG_FATAL,
                                 "commit_schemas: out of memory on malloc\n");
                         exit(1);
                     }
@@ -5566,7 +5572,7 @@ int is_tag_ondisk(const char *table, const char *tag)
         return -1;
     int rc = is_tag_ondisk_sc(sc);
     if (rc < 0)
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "is_tag_ondisk: table %s tag %s has illegal type %d member 0\n",
                 table, tag, sc->member[0].type);
     return rc;
@@ -6098,7 +6104,7 @@ void freedb_int(dbtable *db, dbtable *replace)
 
     dbs_idx = db->dbs_idx;
 
-    if (!replace) 
+    if (!replace)
         free(sqlaliasname);
     free(db->lrlfname);
     free(db->tablename);
@@ -6649,7 +6655,7 @@ int extract_decimal_quantum(const dbtable *db, int ix, char *inbuf,
     }
 
     if (outbuf && outlen && (outbuf_max < 4 * decimals)) {
-        logmsg(LOGMSG_ERROR, 
+        logmsg(LOGMSG_ERROR,
                 "%s: wrong buffer size, cannot construct datacopy %d+1 >= %d \n",
                 __func__, 4 * decimals, outbuf_max);
         return -1;

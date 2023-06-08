@@ -488,6 +488,12 @@ static int create_key_schema(dbtable *db, struct schema *schema, int alt,
                 }
                 m->type = schema->member[m->idx].type;
                 m->len = schema->member[m->idx].len;
+                if (db->periods[PERIOD_SYSTEM].enable) {
+                    if (m->idx == db->periods[PERIOD_SYSTEM].start)
+                        m->flags |= SYSTEM_START;
+                    else if (m->idx == db->periods[PERIOD_SYSTEM].end)
+                        m->flags |= SYSTEM_END;
+                }
 
                 /* the dbstore default is still needed during schema change, so
                  * populate that */
@@ -693,6 +699,7 @@ static int add_cmacc_stmt(dbtable *db, int alt, int allow_ull,
     int field;
     int rc;
     struct schema *schema;
+    int period, start, end;
     char buf[MAXCOLNAME + 1] = {0}; /* scratch space buffer */
     int offset;
     int ntags;
@@ -886,7 +893,7 @@ static int add_cmacc_stmt(dbtable *db, int alt, int allow_ull,
                     schema->recsize = offset;
                 }
 #if 0
-              schema->member[field].type = 
+              schema->member[field].type =
                   client_type_to_server_type(schema->member[field].type);
 #endif
                 if (!no_side_effects) {
@@ -937,6 +944,53 @@ static int add_cmacc_stmt(dbtable *db, int alt, int allow_ull,
                     errstat_set_rcstrf(err, -1, "invalid dbpad value");
                     return -1;
                 }
+            }
+        }
+        for (period = 0; period < PERIOD_MAX; period++) {
+            start = end = -1;
+            rc = dyns_get_period(period, &start, &end);
+            if (rc != 0) {
+                if (rtag) free(rtag);
+                return -1;
+            }
+            if (start >= 0 && end >= 0) {
+                if ((schema->member[start].flags & MEMBER_PERIOD_MASK) ||
+                    (schema->member[end].flags & MEMBER_PERIOD_MASK)) {
+                    if (db->iq)
+                        errstat_set_rcstrf(err, -1,
+                                  "period time already in use.");
+                    if (rtag) free(rtag);
+                    return -1;
+                }
+                if (schema->member[start].in_default ||
+                    schema->member[start].out_default ||
+                    schema->member[end].in_default ||
+                    schema->member[end].out_default) {
+                    if (db->iq)
+                        errstat_set_rcstrf(
+                            err, -1,
+                            "period time should not have default values.");
+                    if (rtag) free(rtag);
+                    return -1;
+                }
+                if (schema->member[start].flags & NO_NULL ||
+                    schema->member[end].flags & NO_NULL) {
+                    if (db->iq)
+                        errstat_set_rcstrf(err, -1,
+                                  "period time should be nullable.");
+                    if (rtag) free(rtag);
+                    return -1;
+                }
+                schema->member[start].flags |=
+                    (period == PERIOD_SYSTEM ? SYSTEM_START : BUSINESS_START);
+                schema->member[end].flags |=
+                    (period == PERIOD_SYSTEM ? SYSTEM_END : BUSINESS_END);
+                schema->periods[period].enable = 1;
+                schema->periods[period].start = start;
+                schema->periods[period].end = end;
+                db->periods[period].enable = 1;
+                db->periods[period].start = start;
+                db->periods[period].end = end;
             }
         }
         if (create_key_schema(db, schema, alt, err) > 0)
