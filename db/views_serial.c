@@ -471,6 +471,12 @@ static int _views_do_partition_create(void *tran, timepart_views_t *views,
                  first_shard);
         goto error;
     }
+    if (db->periods[PERIOD_SYSTEM].enable) {
+        err->errval = VIEW_ERR_PARAM;
+        snprintf(err->errstr, sizeof(err->errstr), "Table %s is temporal",
+                 first_shard);
+        goto error;
+    }
 
     /* reverse constraints from the time partition to other table not supported */
     if (db->n_rev_constraints > 0) {
@@ -479,23 +485,23 @@ static int _views_do_partition_create(void *tran, timepart_views_t *views,
                  first_shard);
         goto error;
     }
-    
+
     check_columns_null_and_dbstore(view->name, db);
 
     /* check to see if the name exists either as a table, or part of a
        different partition */
-    rc = comdb2_partition_check_name_reuse(first_shard, &err_partname, 
+    rc = comdb2_partition_check_name_reuse(first_shard, &err_partname,
                                            &err_shardidx);
     if(rc) {
         if (rc != VIEW_ERR_EXIST)
             abort();
 
         if(err_shardidx == -1) {
-            snprintf(err->errstr, sizeof(err->errstr), 
+            snprintf(err->errstr, sizeof(err->errstr),
                      "Partition name \"%s\" matches seed shard in partition \"%s\"",
                      first_shard, err_partname);
         } else {
-            snprintf(err->errstr, sizeof(err->errstr), 
+            snprintf(err->errstr, sizeof(err->errstr),
                      "Partition name \"%s\" matches shard %d in partition \"%s\"",
                      first_shard, err_shardidx, err_partname);
         }
@@ -1918,4 +1924,3 @@ int main(int argc, char **argv)
 }
 
 #endif
-
