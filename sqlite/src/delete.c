@@ -399,6 +399,9 @@ void sqlite3DeleteFrom(
   Expr *pWhere,          /* The WHERE clause.  May be null */
   ExprList *pOrderBy,    /* ORDER BY clause. May be null */
   Expr *pLimit           /* LIMIT clause. May be null */
+#if defined(SQLITE_BUILDING_FOR_COMDB2)
+  ,Temporal *pTemporal    /* The BUSINESS_TIME clause.  May be null */
+#endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 ){
   Vdbe *v;               /* The virtual database engine */
   Table *pTab;           /* The table from which records will be deleted */
@@ -436,6 +439,15 @@ void sqlite3DeleteFrom(
   Trigger *pTrigger;           /* List of table triggers, if required */
 #endif
 
+#if defined(SQLITE_BUILDING_FOR_COMDB2)
+  Expr *pBusTimeFrom = 0;
+  Expr *pBusTimeTo = 0;
+  if( pTemporal ){
+    pBusTimeFrom = pTemporal->a[1].pFrom;
+    pBusTimeTo = pTemporal->a[1].pTo;
+  }
+#endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
+
   memset(&sContext, 0, sizeof(sContext));
   db = pParse->db;
   if( pParse->nErr || db->mallocFailed ){
@@ -456,7 +468,14 @@ void sqlite3DeleteFrom(
   ** deleted from is a view
   */
 #ifndef SQLITE_OMIT_TRIGGER
+#if defined(SQLITE_BUILDING_FOR_COMDB2)
+  if( pBusTimeFrom && pBusTimeTo )
+    pTrigger = sqlite3TriggersExist(pParse, pTab, TK_BUSINESS_TIME, 0, 0);
+  else
+    pTrigger = sqlite3TriggersExist(pParse, pTab, TK_DELETE, 0, 0);
+#else
   pTrigger = sqlite3TriggersExist(pParse, pTab, TK_DELETE, 0, 0);
+#endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
   isView = pTab->pSelect!=0;
 #else
 # define pTrigger 0
@@ -794,6 +813,9 @@ delete_from_cleanup:
   sqlite3AuthContextPop(&sContext);
   sqlite3SrcListDelete(db, pTabList);
   sqlite3ExprDelete(db, pWhere);
+#if defined(SQLITE_BUILDING_FOR_COMDB2)
+  if( pTemporal ) sqlite3TemporalDelete(db, pTemporal);
+#endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 #if defined(SQLITE_ENABLE_UPDATE_DELETE_LIMIT)
   sqlite3ExprListDelete(db, pOrderBy);
   sqlite3ExprDelete(db, pLimit);

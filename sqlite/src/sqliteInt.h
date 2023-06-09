@@ -4246,7 +4246,7 @@ void sqlite3SrcListFuncArgs(Parse*, SrcList*, ExprList*);
 int sqlite3IndexedByLookup(Parse *, struct SrcList_item *);
 void sqlite3SrcListShiftJoinType(SrcList*);
 #if defined(SQLITE_BUILDING_FOR_COMDB2)
-void sqlite3SrcListAssignCursors(Parse*, SrcList*, int);
+void sqlite3SrcListAssignCursors(Parse*, SrcList*, int, Select*);
 #else /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 void sqlite3SrcListAssignCursors(Parse*, SrcList*);
 #endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
@@ -5107,6 +5107,9 @@ struct Temporal {
   } a[2];
 };
 
+Temporal *sqlite3TemporalAdd(Parse*,Temporal*,Expr*,Expr*,int,int,int);
+Temporal *sqlite3TemporalDup(sqlite3*,Temporal*);
+void sqlite3TemporalDelete(sqlite3*,Temporal*);
 
 int sqlite3RecordCompareExprList(UnpackedRecord *rec, Mem *mems);
 int sqlite3ExprList2MemArray(ExprList *list, Mem *mems);

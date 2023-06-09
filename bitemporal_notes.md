@@ -217,7 +217,14 @@ anything other than zero.  So what is the point of returning `int`?
 The new function `sqlite3BusTimeWhere()` makes heavy use of the existing function
 `sqlite3PExpr()`.  In the code base of the pull request, `sqlite3PExpr()` takes five
 arguments.  In the current code base it takes four.  In all cases used in this
-function, the fifth argument was zero.  I deleted all instances of the fifth argument.
+function, the fifth argument was zero.  I deleted all instances of the fifth
+argument.
+
+This is extremely convoluted.  As of Friday, 8 June, you were in the middle of
+figuring out `sqlite3DeleteFrom()`, but that references a lot of other stuff.
+
+You also need to look at `sqlite3SrcListAssignCursors()`, whose signature is changed
+in sqliteInt.h.  So you need to find its implementation and make the signature match.
 
 
 ## sqlite/src/comdb2build.c
