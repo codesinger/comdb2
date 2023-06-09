@@ -212,6 +212,17 @@ return code is non-zero.  But the function never returns
 anything other than zero.  So what is the point of returning `int`?
 
 
+## sqlite/src/comdb2build.c
+
+In the function `comdb2CreateTimePartition()`, the pull request adds code to block
+the partition if the table is temporal ("time partition on history table is
+currently not supported") or if the table is a history table.  Both of these checks
+require finding the table name.  The table name is not available in the current
+version of `comdb2CreateTimePartition()`, but it is available in a function called by
+`comdb2CreateTimePartition()`, which is _get_partition()`.  Check is moved here.
+
+
+
 
 # Comments
 
