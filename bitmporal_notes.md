@@ -99,6 +99,11 @@ in osqlcomm.c, where the final argument is
 dt.upsert_flags); /* do I need this?*/
 ```
 
+## schemachange/sc_callbacks.c
+
+This file has been extensively restructured since the pull request.  I do not know
+how to merge its changes.
+
 ## schemachange/sc_util.c
 
 The pull request adds two new functions that deal with data types in generating csc2

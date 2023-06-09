@@ -596,7 +596,7 @@ static void throttle_sc_logbytes(int estimate)
             ts.tv_sec += 1;
             pthread_cond_timedwait(&sc_bps_cd, &sc_bps_lk, &ts);
         }
-    } 
+    }
     while ((gbl_sc_logbytes_per_second > 0) && (sc_bytes_this_second > gbl_sc_logbytes_per_second));
     sc_bytes_this_second += estimate;
     Pthread_mutex_unlock(&sc_bps_lk);
@@ -992,7 +992,28 @@ static int convert_record(struct convert_record_data *data)
         p_buf_data_end = p_buf_data + dtalen;
     }
 
+    if (data->iq.usedb->overwrite_systime) {
+        int temporal_overwrite_systime(struct ireq * iq, uint8_t * rec,
+                                       int use_tstart);
+        rc = temporal_overwrite_systime(&(data->iq), p_buf_data, 0);
+        if (rc) {
+            sc_errf(data->s, "temporal_overwrite_systime table %s failed\n",
+                    data->iq.usedb->tablename);
+            rc = -2;
+            goto err;
+        }
+    }
+
     assert(data->trans != NULL);
+
+    int temporal_business_time_check(struct dbtable *db, uint8_t *od_dta);
+    rc = temporal_business_time_check(data->to, p_buf_data);
+    if (rc) {
+        sc_errf(data->s, "Invalid parameter: business start time must be less "
+                         "than business end time\n");
+        return -2;
+        goto err;
+    }
 
     if (data->s->schema_change != SC_CONSTRAINT_CHANGE) {
         int nrrn = rrn;
