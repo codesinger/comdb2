@@ -212,6 +212,14 @@ return code is non-zero.  But the function never returns
 anything other than zero.  So what is the point of returning `int`?
 
 
+## sqlite/src/delete.c
+
+The new function `sqlite3BusTimeWhere()` makes heavy use of the existing function
+`sqlite3PExpr()`.  In the code base of the pull request, `sqlite3PExpr()` takes five
+arguments.  In the current code base it takes four.  In all cases used in this
+function, the fifth argument was zero.  I deleted all instances of the fifth argument.
+
+
 ## sqlite/src/comdb2build.c
 
 In the function `comdb2CreateTimePartition()`, the pull request adds code to block
