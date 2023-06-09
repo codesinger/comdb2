@@ -1,5 +1,43 @@
+# Major changes
+
+`struct db` has become `struct dbtable`.
+
+
+`schema_change_type` has some minor differences (`table` has become `tablename`).
+But the major difference seems to be replacing a bunch of logically boolean
+attributes (`addonly`, `alteronly`, etc) wwith the field `kind` that holds an
+enumerated type (`SC_ADDTABLE`, `SC_DROP_VIEW`, etc.)
+
+The pull request adds more logically boolean attributes to `schema_change_type` such
+as `is_history`, `add_history`, `drop_history`, and `alter_history`.  Might it be
+better to add these as enumerated types in `kind`?
+
+
+
+
 # Queries
 
+## Strange coding style
+
+The pull request introduces some new external functions.  Instead of putting the
+function declaration in a header file and including the header file, the code
+manually declares the function just before use, as in...
+
+```
+    if (data->iq.usedb->overwrite_systime) {
+        int temporal_overwrite_systime(struct ireq * iq, uint8_t * rec,
+                                       int use_tstart);
+        rc = temporal_overwrite_systime(&(data->iq), p_buf_data, 0);
+        if (rc) {
+            sc_errf(data->s, "temporal_overwrite_systime table %s failed\n",
+                    data->iq.usedb->dbname);
+            return -2;
+        }
+    }
+```
+
+Would it not be better to put the declaration of `temporal_overwrite_systime` in a
+header file that was included?
 
 
 ## csc2/maccparse.y
@@ -86,6 +124,17 @@ things such as `addonly`, `alteronly`, etc.
 I have replaced `addonly = 1` with `kind = SC_ADDTABLE` and
 `alteronly = 1` with `kind = SC_ALTERTABLE`.  Is this right?
 
+## schemachange/sc_logic.c
+
+In the pull request version, `do_alter_table()` was located in this file.  In the
+current version, `do_alter_table()` has been moved to `sc_alter_table.c`.
+
+It is not clear if the temporal changes to the `do_alter_table()` in
+`schemachange/sc_logic.c` apply to the `do_alter_table()` in `sc_alter_table.c`.
+
+The pull request makes changes to the function `backout_schema_change()` in
+`sc_logic.`.  I have not applied those changes to the current version of
+`backout_schema_change()`.  Function seems to be fundamentaly different.
 
 ## bdb/bdb_fetch.h
 

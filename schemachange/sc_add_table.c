@@ -311,6 +311,7 @@ int do_add_table(struct ireq *iq, struct schema_change_type *s,
     return 0;
 }
 
+
 int finalize_add_table(struct ireq *iq, struct schema_change_type *s,
                        tran_type *tran)
 {

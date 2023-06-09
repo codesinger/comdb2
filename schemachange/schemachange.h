@@ -138,6 +138,7 @@ enum schema_change_kind {
 #define IS_ALTERTABLE(s)                                                       \
     (((s)->kind >= SC_ALTERTABLE) && ((s)->kind <= SC_REBUILDTABLE_INDEX))
 
+
 struct schema_change_type {
     /*  ==========    persistent members ========== */
     enum schema_change_kind kind;
@@ -253,6 +254,7 @@ struct schema_change_type {
     /********************** it will change eventually (do not try to serialize)
      * ************/
 
+    /* temporal table */
     struct dbtable *db;
     struct dbtable *newdb;
     struct timepart_view *newpartition;
