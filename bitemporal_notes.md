@@ -198,6 +198,23 @@ For example, it simply copies from one `schema_change_type` to another the conte
 of `newcsc2`.  Should it not malloc a new one for the copy?  It appears that the
 length of the buffer is contained in `newcsc2_len`.
 
+
+## sqlite/src/build.c
+
+The pull request adds another argument (`pSelect`) to the function
+`sqlite3SrcListAssignCursors()`.  But the extra argument is never referenced in the
+function.
+
+The function signature was also changed from returning `void` to returning `int`.
+
+It recursively calls itself from inside of a loop and breaks out of the loop if the
+return code is non-zero.  But the function never returns
+anything other than zero.  So what is the point of returning `int`?
+
+
+
+# Comments
+
 ## bdb/bdb_fetch.h
 
 `bdb_fetch_next_genid` is deleted.  Only called from `db/glue.c`.

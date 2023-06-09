@@ -77,6 +77,12 @@ void deep_copy_schemachange_type(struct schema_change_type *des,
         d->dest = strdup(destent->dest);
         listc_abl(&des->dests, d);
     }
+    if (src->newcsc2 != NULL)
+    {
+        assert(src->newcsc2_len != 0);
+        des->newcsc2 = (char *)malloc(src->newcsc2_len);
+        assert(des->newcsc2 != NULL);
+    }
     des->db = des->newdb = NULL;
 }
 
