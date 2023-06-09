@@ -28,6 +28,7 @@
 extern int gbl_partial_indexes;
 extern uint64_t gbl_sc_headroom;
 
+int key_has_member(struct schema *key, const char *name);
 int verify_record_constraint(const struct ireq *iq, const struct dbtable *db, void *trans,
                              const void *old_dta, unsigned long long ins_keys,
                              blob_buffer_t *blobs, int maxblobs,
@@ -269,7 +270,7 @@ static int verify_constraints_forward_changes(struct dbtable *db, struct dbtable
                 logmsg(LOGMSG_ERROR, "error in checking constraint key %s\n",
                        ct->lclkeyname);
                 return -2;
-            } else if (rc == 0) {
+            } else if (rc == 0 && (ct->flags != CT_NO_OVERLAP)) {
                 int j = 0;
                 /* we need this loop for any constraint rules that may
                    point back to our table.  If that's the case, we
@@ -368,6 +369,13 @@ int set_header_and_properties(void *tran, struct dbtable *newdb,
         sc_errf(s, "Failed to set bthash size in meta\n");
         return SC_TRANSACTION_FAILED;
     }
+
+    if ((newdb->periods[PERIOD_SYSTEM].enable || newdb->is_history_table) &&
+        !(s->kind == SC_ALTERTABLE) && put_db_start_time(newdb, tran)) {
+        sc_errf(s, "Failed to set start time in meta\n");
+        return SC_TRANSACTION_FAILED;
+    }
+
     return SC_OK;
 }
 
@@ -733,6 +741,23 @@ int create_schema_change_plan(struct schema_change_type *s, struct dbtable *oldd
     int force_dta_rebuild = s->force_dta_rebuild;
     int force_blob_rebuild = s->force_blob_rebuild;
 
+    int pre_is_temproal, post_is_temproal;
+    pre_is_temproal = post_is_temproal = 0;
+    if (s->is_history == 0 && olddb && olddb->periods[PERIOD_SYSTEM].enable)
+        pre_is_temproal = 1;
+    if (s->is_history == 0 && newdb && newdb->periods[PERIOD_SYSTEM].enable)
+        post_is_temproal = 1;
+    if (!pre_is_temproal && post_is_temproal) force_dta_rebuild = 1;
+
+    if (pre_is_temproal || post_is_temproal) {
+        if (!pre_is_temproal && post_is_temproal)
+            scprint(s, ">    Adding history table\n");
+        else if (pre_is_temproal && !post_is_temproal)
+            scprint(s, ">    Dropping history table\n");
+        else
+            scprint(s, ">    Altering history table\n");
+    }
+
     /* Patch for now to go over blob corruption issue:
        if I am forcing blob rebuilds, I am forcing rec rebuild */
     if (force_blob_rebuild) force_dta_rebuild = 1;
@@ -793,7 +818,7 @@ int create_schema_change_plan(struct schema_change_type *s, struct dbtable *oldd
             sc_printf(s, info + 1);
 
         plan->dta_plan = -1;
-        plan->plan_convert = 1;
+        plan->plan_convert = SC_PLAN_CONVERT;
 
         /* Converting VUTF8 to CSTRING or BLOB to BYTEARRAY */
         if ((newsc->nmembers == oldsc->nmembers) &&
@@ -900,6 +925,10 @@ int create_schema_change_plan(struct schema_change_type *s, struct dbtable *oldd
          * the index must be rebuilt. */
         if ((newixs->flags & (SCHEMA_DATACOPY | SCHEMA_PARTIALDATACOPY)) && plan->dta_plan == -1) {
             plan->ix_plan[ixn] = -1;
+        } else if (!pre_is_temproal && post_is_temproal) { /* add history */
+            plan->ix_plan[ixn] = -1;
+        } else if (pre_is_temproal && !post_is_temproal) { /* drop history */
+            plan->ix_plan[ixn] = -1;
         } else {
             /* Try to find an unused index in the old file which exactly matches
              * this index ondisk. */
@@ -926,7 +955,7 @@ int create_schema_change_plan(struct schema_change_type *s, struct dbtable *oldd
             plan->ix_plan[ixn] = -1;
 
         /* If we have to build an index, we have to run convert_all_records */
-        if (plan->ix_plan[ixn] == -1) plan->plan_convert = 1;
+        if (plan->ix_plan[ixn] == -1) plan->plan_convert = SC_PLAN_CONVERT;
 
         char *str_datacopy;
         if (newixs->flags & (SCHEMA_DATACOPY | SCHEMA_PARTIALDATACOPY)) {
@@ -993,6 +1022,26 @@ int create_schema_change_plan(struct schema_change_type *s, struct dbtable *oldd
         newdb->n_constraints) {
         plan->plan_convert = 1;
         str_constraints = " (to verify constraints)";
+        for (ii = 0; ii < newdb->n_constraints; ii++) {
+            char ondisk_tag[MAXTAGLEN];
+            constraint_t *ct = &newdb->constraints[ii];
+            if (ct->flags == CT_NO_OVERLAP) {
+                if (find_constraint(olddb, ct) == 0) {
+                    snprintf(ondisk_tag, sizeof(ondisk_tag), ".NEW.%s",
+                             ct->lclkeyname);
+                    getidxnumbyname(newdb->tablename, ondisk_tag, &ixn);
+                    plan->ix_plan[ixn] = -1;
+                    plan->plan_convert = SC_KEYVER_CONVERT;
+                    info = ">    Rebuild index %d (%s) %s\n";
+                    if (s->dryrun)
+                        sbuf2printf(s->sb, info, ixn, ct->lclkeyname,
+                                    str_constraints);
+                    else
+                        sc_printf(s, info + 1, ixn, ct->lclkeyname,
+                                  str_constraints);
+                }
+            }
+        }
     }
 
     if (plan->plan_convert)
@@ -1040,6 +1089,7 @@ void set_odh_options_tran(struct dbtable *db, tran_type *tran)
     get_db_compress_tran(db, &compr, tran);
     get_db_compress_blobs_tran(db, &blob_compr, tran);
     db->schema_version = get_csc2_version_tran(db->tablename, tran);
+    get_db_start_time(db, &db->tstart, tran);
 
     set_bdb_option_flags(db, db->odh, db->inplace_updates,
                          db->instant_schema_change, db->schema_version, compr,
@@ -1350,6 +1400,7 @@ int compatible_constraint_source(struct dbtable *olddb, struct dbtable *newdb,
             continue;
         for (j = 0; j < db->n_constraints; ++j) {
             constraint_t *ct = &db->constraints[j];
+            if (ct->flags == CT_NO_OVERLAP) continue;
             for (k = 0; k < ct->nrules; ++k) {
                 if (strcmp(dbname, ct->table[k]) == 0 &&
                     strcasecmp(key, ct->keynm[k]) == 0) {

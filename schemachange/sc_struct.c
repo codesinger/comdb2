@@ -46,6 +46,7 @@ struct schema_change_type *init_schemachange_type(struct schema_change_type *sc)
     sc->timepartition_name = NULL;
     sc->partition.type = PARTITION_NONE;
     listc_init(&sc->dests, offsetof(struct dest, lnk));
+    sc->is_history = 0;
     Pthread_mutex_init(&sc->mtx, NULL);
     Pthread_mutex_init(&sc->livesc_mtx, NULL);
     Pthread_mutex_init(&sc->mtxStart, NULL);
@@ -61,6 +62,22 @@ struct schema_change_type *new_schemachange_type()
         sc = init_schemachange_type(sc);
 
     return sc;
+}
+
+void deep_copy_schemachange_type(struct schema_change_type *des,
+                                 struct schema_change_type *src)
+{
+    struct dest *destent;
+    memcpy(des, src, sizeof(struct schema_change_type));
+    if (src->newcsc2) des->newcsc2 = strdup(src->newcsc2);
+    listc_init(&des->dests, offsetof(struct dest, lnk));
+    LISTC_FOR_EACH(&src->dests, destent, lnk)
+    {
+        struct dest *d = malloc(sizeof(struct dest));
+        d->dest = strdup(destent->dest);
+        listc_abl(&des->dests, d);
+    }
+    des->db = des->newdb = NULL;
 }
 
 void cleanup_strptr(char **schemabuf)
@@ -82,6 +99,9 @@ void free_schema_change_type(struct schema_change_type *s)
 {
     if (!s)
         return;
+    if (s->history_s) free_schema_change_type(s->history_s);
+    s->history_s = NULL;
+
     if (s->newcsc2) {
         free(s->newcsc2);
         s->newcsc2 = NULL;

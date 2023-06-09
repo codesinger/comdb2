@@ -48,6 +48,30 @@ Note that named constraint (introduced in r7), so there is an extra instance of
 I have a feeling that a named "no overlap" constraint will not work.
 
 
+## db/constraints.c
+
+There is some code for checkong "no overlap" constraints that the pull request added
+to the function `verify_record_constraint()` in `schemachange/sc_schema.c`.  That
+code has been moved to the function `check_single_key_constraint()` in
+`db/constraints.c`.
+
+The original `verify_record_constraint()` in `schemachange/sc_schema.c` was passed
+an argument of `struct db *db`.  The new function `check_single_key_constraint()` in
+`db/constraints.c` is not passed a pointer to `struct dbtable`.  I added code to
+extract a pointer to `struct dtable` from `constraint_t->lcltable`.  This seems
+dangerous.
+
+On looking at this again, the code in the pull request does not fit here.  But it
+has to go somewhere.  Look for the line
+
+```
+if (ct->flags & CT_NO_OVERLAP) {
+```
+
+in the pull request version of `verify_record_constraint()` in
+`schemachange/sc_schema.c`.
+
+
 ## db/osqlcomm.c
 
 In the function `osql_process_packet()`, this case statement and all of its
@@ -140,6 +164,39 @@ It is not clear if the temporal changes to the `do_alter_table()` in
 The pull request makes changes to the function `backout_schema_change()` in
 `sc_logic.`.  I have not applied those changes to the current version of
 `backout_schema_change()`.  Function seems to be fundamentaly different.
+
+## schemachange/sc_schema.c
+
+There is a line of code that the pull request adds to line 1241 of this file
+
+```
+newdb->n_rev_cascade_systime = db->n_rev_cascade_systime;
+```
+
+This line of code does not seem to fit in the new version of this file.
+
+Same thing with the lines 1264 - 1266 in the pull request.  Look for the line
+
+```
+if ((ct->flags & (CT_UPD_CASCADE | CT_DEL_CASCADE)) != 0 &&
+```
+
+In fact, none of the changes in the pull request for the function
+`restore_constraint_pointers_main()` seem to fit the new version of this function.
+
+None of the changes to the function `remove_constraint_pointers()` in the pull
+request could be migrated to the new code.  Too different.  These are the changes in
+lines 1449 - 1451 in the pull request in `sc_schema.c`
+
+
+## schemachange/sc_struct.c
+
+The new function `deep_copy_schemachange_type()` added by the pull request looks
+problematic.
+
+For example, it simply copies from one `schema_change_type` to another the contents
+of `newcsc2`.  Should it not malloc a new one for the copy?  It appears that the
+length of the buffer is contained in `newcsc2_len`.
 
 ## bdb/bdb_fetch.h
 
