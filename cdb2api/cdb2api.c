@@ -2913,7 +2913,7 @@ retry_read:
                                             happened within transaction. */
         hndl->firstresponse =
             cdb2__sqlresponse__unpack(NULL, len, hndl->first_buf);
-        hndl->error_in_trans = 
+        hndl->error_in_trans =
             cdb2_convert_error_code(hndl->firstresponse->error_code);
         if (hndl->firstresponse->error_string)
             strcpy(hndl->errstr, hndl->firstresponse->error_string);
@@ -4124,9 +4124,13 @@ static int process_set_command(cdb2_hndl_tp *hndl, const char *sql)
         char *dup_sql = strdup(sql + skip_len);
         char *rest = NULL;
         char *set_tok = strtok_r(dup_sql, " ", &rest);
-        /* special case for spversion */
+        /* special case for spversion and temporal */
         if (set_tok && strcasecmp(set_tok, "spversion") == 0) {
             skip_len += 10;
+            set_tok = strtok_r(rest, " ", &rest);
+        }
+        } else if (set_tok && strcasecmp(set_tok, "temporal") == 0) {
+            skip_len += 9;
             set_tok = strtok_r(rest, " ", &rest);
         }
         /* special case for transaction chunk */
@@ -4411,7 +4415,7 @@ retry_queries:
         rc = cdb2_send_query(hndl, hndl, hndl->sb, hndl->dbname, (char *)sql, 0,
                              0, NULL, hndl->n_bindvars, hndl->bindvars, ntypes,
                              types, 0, 0, 0, run_last, __LINE__);
-        if (rc != 0) 
+        if (rc != 0)
             hndl->query_no -= run_last;
     }
     if (rc) {
@@ -4773,7 +4777,7 @@ read_record:
         }
         int rc = cdb2_next_record_int(hndl, 1);
         if (rc == CDB2_OK_DONE || rc == CDB2_OK) {
-            return_value = 
+            return_value =
                 cdb2_convert_error_code(hndl->firstresponse->error_code);
             if (is_hasql_commit)
                 cleanup_query_list(hndl, commit_query_list, __LINE__);
@@ -4978,9 +4982,9 @@ void cdb2_getinfo(cdb2_hndl_tp *hndl, int *intrans, int *hasql)
     (*hasql) = hndl->is_hasql;
 }
 
-void cdb2_set_debug_trace(cdb2_hndl_tp *hndl) 
-{ 
-    hndl->debug_trace = 1; 
+void cdb2_set_debug_trace(cdb2_hndl_tp *hndl)
+{
+    hndl->debug_trace = 1;
 }
 
 void cdb2_dump_ports(cdb2_hndl_tp *hndl, FILE *out)
