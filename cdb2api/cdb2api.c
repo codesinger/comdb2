@@ -4128,7 +4128,6 @@ static int process_set_command(cdb2_hndl_tp *hndl, const char *sql)
         if (set_tok && strcasecmp(set_tok, "spversion") == 0) {
             skip_len += 10;
             set_tok = strtok_r(rest, " ", &rest);
-        }
         } else if (set_tok && strcasecmp(set_tok, "temporal") == 0) {
             skip_len += 9;
             set_tok = strtok_r(rest, " ", &rest);
