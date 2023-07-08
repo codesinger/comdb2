@@ -23,6 +23,7 @@ enum synctype {
 #define MAXINITSIZE 256000000 /* safety limit on init files */
 #define COMMENT_COLUMN 40     /* column for comments    */
 #define MAX_CLUSTER 16
+#define MAX_KEY_SIZE 512
 /* currently, we have 28 indeces in comdb2 due to buffer size restrictions */
 #define MAX_KEY_INDEX 28
 
@@ -34,7 +35,7 @@ made throughout comdb2. */
    The largest possible buffer through comdb2_api right now is update by rrn in
    WORDS as follows:
 
-   4 words  +  2*((3 + MAXKEYLEN/4) * MAX_KEY_INDEX) + 6 words +
+   4 words  +  2*((3 + MAX_KEY_SIZE/4) * MAX_KEY_INDEX) + 6 words +
    2*(COMDB2_MAX_RECORD_SIZE/4) == 4018 words
    (blkstart)     (blkdelnod+blkadnod)                      blkupvrrn
 
@@ -83,10 +84,20 @@ struct fieldopt {
     } value;
 };
 
+enum pd_flags { PERIOD_SYSTEM = 0, PERIOD_BUSINESS = 1, PERIOD_MAX = 2 };
+
+struct period {
+    int enable;   /* If true, this table is temporal (business, system, or bi) */
+    int start;    /* Index to start time field for this type of temporal       */
+    int end;      /* Index to end time field for this type of temporal         */
+};
+
+
 enum ct_flags {
     CT_UPD_CASCADE = 0x00000001,
     CT_DEL_CASCADE = 0x00000002,
-    CT_DEL_SETNULL = 0x00000008,
+    CT_DEL_SETNULL = 0x00000004,
+    CT_NO_OVERLAP  = 0x00000008
 };
 
 enum ct_type { CT_FKEY, CT_CHECK };
@@ -188,6 +199,8 @@ enum INDEXFLAGS {
 };
 
 typedef struct macc_globals_t {
+    struct period periods[PERIOD_MAX];
+    int nperiods;
     struct constraint constraints[MAXCNSTRTS];
     struct check_constraint check_constraints[MAXCNSTRTS];
     struct symbol symb[MAX];
@@ -297,7 +310,9 @@ int numix();
 void resolve_case_names();
 void set_constraint_mod(int start, int op, int type);
 void set_constraint_name(char *name, enum ct_type type);
-void start_constraint_list(char *keyname);
+void start_constraint_list(char *keyname, int no_overlap);
+void start_periods_list(void);
+void add_period(char *name, char *start, char *end);
 void add_constraint(char *tbl, char *key);
 void add_check_constraint(char *expr);
 void add_constant(char *name, int value, short type);
