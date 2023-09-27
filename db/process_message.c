@@ -208,6 +208,7 @@ static const char *HELP_STAT[] = {
     "stat clnt [#] [rates|totals]- show per client request stats",
     "stat mtrap                 - show mtrap system stats",
     "stat dohsql                - show distributed sql stats",
+    "stat oldfile               - dump oldfile hash",
     "dmpl                       - dump threads",
     "dmptrn                     - show long transaction stats",
     "dmpcts                     - show table constraints",
@@ -819,6 +820,10 @@ clipper_usage:
         bdb_transfermaster(dbenv->static_table.handle);
     } else if (tokcmp(tok, ltok, "losemaster") == 0) {
         bdb_losemaster(dbenv->static_table.handle);
+    } else if (tokcmp(tok, ltok, "forceelect") == 0) {
+        call_for_election(thedb->bdb_env, __func__, __LINE__);
+    } else if (tokcmp(tok, ltok, "thedbmaster") == 0) {
+        logmsg(LOGMSG_USER, "%s\n", thedb->master);
     } else if (tokcmp(tok, ltok, "upgrade") == 0) {
         char *newmaster = 0;
         tok = segtok(line, lline, &st, &ltok);
@@ -864,8 +869,7 @@ clipper_usage:
         delete_log_files(thedb->bdb_env);
     } else if (tokcmp(tok, ltok, "pushnext") == 0) {
         push_next_log();
-    }
-    else if (tokcmp(tok, ltok, "netpoll") == 0) {
+    } else if (tokcmp(tok, ltok, "netpoll") == 0) {
         int pval;
         tok = segtok(line, lline, &st, &ltok);
         pval = toknum(tok, ltok);
@@ -1836,6 +1840,7 @@ clipper_usage:
             logmsg(LOGMSG_USER, "readonly                %c\n", gbl_readonly ? 'Y' : 'N');
             logmsg(LOGMSG_USER, "num sql queries         %u\n", gbl_nsql);
             logmsg(LOGMSG_USER, "num new sql queries     %u\n", gbl_nnewsql);
+            logmsg(LOGMSG_USER, "num ssl sql queries     %u\n", gbl_nnewsql_ssl);
             logmsg(LOGMSG_USER, "num master rejects      %u\n",
                    gbl_masterrejects);
             logmsg(LOGMSG_USER, "sql ticks               %llu\n", gbl_sqltick);
@@ -1929,6 +1934,9 @@ clipper_usage:
             upgrade_records_stats();
         } else if (tokcmp(tok, ltok, "dohsql") == 0) {
             dohsql_stats();
+        } else if (tokcmp(tok, ltok, "oldfile") == 0) {
+            void oldfile_dump(void);
+            oldfile_dump();
         } else if (tokcmp(tok, ltok, "ssl") == 0) {
             ssl_stats();
         } else {

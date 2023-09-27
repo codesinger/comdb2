@@ -508,6 +508,7 @@ struct summary_nodestats {
     char *task;
     char *stack;
     int ref;
+    int is_ssl;
 
     unsigned finds;
     unsigned rngexts;
@@ -983,7 +984,7 @@ struct dbenv {
 extern struct dbenv *thedb;
 extern comdb2_tunables *gbl_tunables;
 
-extern pthread_key_t unique_tag_key;
+extern pthread_key_t thd_info_key;
 extern pthread_key_t query_info_key;
 
 struct req_hdr {
@@ -1707,7 +1708,32 @@ extern uint32_t gbl_nsql;
 extern long long gbl_nsql_steps;
 
 extern unsigned int gbl_nnewsql;
+extern unsigned int gbl_nnewsql_ssl;
 extern long long gbl_nnewsql_steps;
+
+/* Legacy request metrics */
+extern int64_t gbl_fastsql_execute_inline_params;
+extern int64_t gbl_fastsql_set_isolation_level;
+extern int64_t gbl_fastsql_set_timeout;
+extern int64_t gbl_fastsql_set_info;
+extern int64_t gbl_fastsql_execute_inline_params_tz;
+extern int64_t gbl_fastsql_set_heartbeat;
+extern int64_t gbl_fastsql_pragma;
+extern int64_t gbl_fastsql_reset;
+extern int64_t gbl_fastsql_execute_replaceable_params;
+extern int64_t gbl_fastsql_set_sql_debug;
+extern int64_t gbl_fastsql_grab_dbglog;
+extern int64_t gbl_fastsql_set_user;
+extern int64_t gbl_fastsql_set_password;
+extern int64_t gbl_fastsql_set_endian;
+extern int64_t gbl_fastsql_execute_replaceable_params_tz;
+extern int64_t gbl_fastsql_get_effects;
+extern int64_t gbl_fastsql_set_planner_effort;
+extern int64_t gbl_fastsql_set_remote_access;
+extern int64_t gbl_fastsql_osql_max_trans;
+extern int64_t gbl_fastsql_set_datetime_precision;
+extern int64_t gbl_fastsql_sslconn;
+extern int64_t gbl_fastsql_execute_stop;
 
 extern unsigned int gbl_masterrejects;
 
@@ -2389,8 +2415,8 @@ int add_queue_to_environment(char *table, int avgitemsz, int pagesize);
 void stop_threads(struct dbenv *env);
 void resume_threads(struct dbenv *env);
 void replace_db_idx(struct dbtable *p_db, int idx);
-int add_db(struct dbtable *db);
-void delete_db(char *db_name);
+int add_dbtable_to_thedb_dbs(dbtable *table);
+void rem_dbtable_from_thedb_dbs(dbtable *table);
 void hash_sqlalias_db(dbtable *db, const char *newname);
 int rename_db(struct dbtable *db, const char *newname);
 int ix_find_rnum_by_recnum(struct ireq *iq, int recnum_in, int ixnum,
@@ -2901,7 +2927,7 @@ void nodestats_report(FILE *fh, const char *prefix, int disp_rates);
 void nodestats_node_report(FILE *fh, const char *prefix, int disp_rates,
                            char *host);
 struct rawnodestats *get_raw_node_stats(const char *task, const char *stack,
-                                        char *host, int fd);
+                                        char *host, int fd, int is_ssl);
 int release_node_stats(const char *task, const char *stack, char *host);
 struct summary_nodestats *get_nodestats_summary(unsigned *nodes_cnt,
                                                 int disp_rates);
@@ -3571,7 +3597,7 @@ extern int gbl_ckp_sleep_before_sync;
 
 int set_rowlocks(void *trans, int enable);
 
-void init_sqlclntstate(struct sqlclntstate *clnt, char *tid, int isuuid);
+void init_sqlclntstate(struct sqlclntstate *clnt, char *tid);
 
 /* 0: Return null constraint error for not-null constraint violation on updates
    1: Return conversion error instead */

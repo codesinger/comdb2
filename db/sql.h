@@ -263,6 +263,7 @@ typedef struct {
     int maxchunksize;     /* multi-transaction bulk mode */
     int crtchunksize;     /* how many rows are processed already */
     int nchunks;          /* number of chunks. 0 for a non-chunked transaction. */
+    int views_lk_held;    /* Am I holding views_lk? */
 } dbtran_type;
 typedef dbtran_type trans_t;
 
@@ -585,7 +586,8 @@ enum prepare_flags {
     PREPARE_NO_NORMALIZE = 32,
     PREPARE_ONLY = 64,
     PREPARE_ALLOW_TEMP_DDL = 128,
-    PREPARE_ACQUIRE_SPLOCK = 256
+    PREPARE_ACQUIRE_SPLOCK = 256,
+    PREPARE_ACQUIRE_VIEWSLK = 512
 };
 
 /* This structure is designed to hold several pieces of data related to
@@ -791,10 +793,6 @@ struct sqlclntstate {
     arch_tid appsock_id;
     int holding_pagelocks_flag; /* Rowlocks optimization */
 
-    int *hinted_cursors;
-    int hinted_cursors_alloc;
-    int hinted_cursors_used;
-
     /* remote settings, used in run_sql */
     sqlclntstate_fdb_t fdb_state;
 
@@ -931,6 +929,7 @@ struct sqlclntstate {
     int disable_fdb_push;
 
     int lastresptype;
+    char *externalAuthUser;
 };
 
 /* Query stats. */
@@ -1254,8 +1253,6 @@ int sqlite_to_ondisk(struct schema *s, const void *inp, int len, void *outp,
                      struct convert_failure *fail_reason, BtCursor *pCur);
 
 int has_sqlcache_hint(const char *sql, const char **start, const char **end);
-void clnt_reset_cursor_hints(struct sqlclntstate *);
-void clnt_free_cursor_hints(struct sqlclntstate *);
 
 void sqlite3VdbeRecordPack(UnpackedRecord *unpacked, Mem *pOut);
 char *sql_field_default_trans(struct field *f, int is_out);

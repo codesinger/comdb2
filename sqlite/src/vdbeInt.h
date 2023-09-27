@@ -579,6 +579,7 @@ struct Vdbe {
   int *updCols;           /* list of columns modified in this update */
   Table **tbls;           /* list of tables to be open. */ 
   u16 numTables;
+  u16 vTableFlags;        /* Pre-acquire rwlocks / mutexes for certain vtables */
   u16 numVTableLocks;
   char **vTableLocks;
   char tzname[TZNAME_MAX];/* timezone info for datetime support */
@@ -593,6 +594,7 @@ struct Vdbe {
   char **oldColDeclTypes; /* Column decltypes returned by old-sqlite version */
   int oldColCount;        /* Column count (refer: sqlitex)*/
   u8 fingerprint_added;   /* Whether fingerprint was added? Only used in SP code */
+  int fdb_warn_this_op;   /* Warn about this opcode which is ineligible for cursor hint */
 #endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 };
 

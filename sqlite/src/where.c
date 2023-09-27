@@ -43,7 +43,7 @@ static int whereLoopResize(sqlite3*, WhereLoop*, int);
 #endif /* defined(SQLITE_BUILDING_FOR_COMDB2) || defined(SQLITE_TEST) || defined(SQLITE_DEBUG) */
 
 #if defined(SQLITE_BUILDING_FOR_COMDB2)
-int gbl_disable_seekscan_optimization = 0;
+int gbl_disable_seekscan_optimization = 1;
 int gbl_sqlite_stat4_scan = 0;
 
 int shard_check_parallelism(int iTable);
@@ -3086,9 +3086,6 @@ static int whereLoopAddBtree(
 #else
       pNew->rRun = rSize + 16;
 #endif
-      if( (pTab->tabFlags & TF_Ephemeral)!=0 ){
-        pNew->wsFlags |= WHERE_VIEWSCAN;
-      }
       ApplyCostMultiplier(pNew->rRun, pTab->costMult);
       whereLoopOutputAdjust(pWC, pNew, rSize);
       rc = whereLoopInsert(pBuilder, pNew);
@@ -4269,13 +4266,6 @@ static int wherePathSolver(WhereInfo *pWInfo, LogEst nRowEst){
         }else{
           rCost = rUnsorted;
           rUnsorted -= 2;  /* TUNING:  Slight bias in favor of no-sort plans */
-        }
-
-        /* TUNING:  A full-scan of a VIEW or subquery in the outer loop
-        ** is not so bad. */
-        if( iLoop==0 && (pWLoop->wsFlags & WHERE_VIEWSCAN)!=0 ){
-          rCost += -10;
-          nOut += -30;
         }
 
         /* Check to see if pWLoop should be added to the set of

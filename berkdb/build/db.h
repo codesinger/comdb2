@@ -1402,6 +1402,7 @@ typedef enum {
 #define	DB_VERIFY_BAD		(-30976)/* Verify failed; bad format. */
 #define	DB_CUR_STALE		(-30975)/* Cursor deserialization failed since 
 					 * something had changed. comdb2 add */
+#define	DB_HAS_MAJORITY		(-30974)/* have enough votes to become a majority */
 #define DB_LOCK_DESIRED		(-31000)/* BDB needs  a long running operation
 					 *  out of the library */
 #define DB_LOCK_DEADLOCK_CUSTOM	(-31001)/* Deadlock on custom log record.  */
@@ -2568,7 +2569,7 @@ struct __db_env {
 	int  (*memp_trickle) __P((DB_ENV *, int, int *, int));
 
 	void *rep_handle;		/* Replication handle and methods. */
-	int  (*rep_elect) __P((DB_ENV *, int, int, u_int32_t, u_int32_t *, char **));
+	int  (*rep_elect) __P((DB_ENV *, int, int, u_int32_t, u_int32_t *, int *, char **));
 	int  (*rep_flush) __P((DB_ENV *));
 	int  (*rep_process_message) __P((DB_ENV *, DBT *, DBT *,
 		char **, DB_LSN *, uint32_t *, int));

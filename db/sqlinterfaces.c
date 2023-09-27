@@ -761,6 +761,18 @@ static void record_locked_vtable(struct sql_authorizer_state *pAuthState, const 
     if (table != NULL && (strcmp(table, "comdb2_triggers") == 0)) {
         pAuthState->flags |= PREPARE_ACQUIRE_SPLOCK;
     }
+    if (table != NULL && (strncasecmp(table, "comdb2_", 7) == 0)) {
+        table += 7;
+        if (strcasecmp(table, "tables") == 0 ||
+            strcasecmp(table, "columns") == 0 ||
+            strcasecmp(table, "keys") == 0 ||
+            strcasecmp(table, "keycomponents") == 0 ||
+            strcasecmp(table, "timepartitions") == 0 ||
+            strcasecmp(table, "timepartshards") == 0 ||
+            strcasecmp(table, "timepartevents") == 0) {
+            pAuthState->flags |= PREPARE_ACQUIRE_VIEWSLK;
+        }
+    }
     if (vtable_lock && !vtable_search(pAuthState->vTableLocks, pAuthState->numVTableLocks, vtable_lock)) {
         pAuthState->vTableLocks =
             (char **)realloc(pAuthState->vTableLocks, sizeof(char *) * (pAuthState->numVTableLocks + 1));
@@ -3123,7 +3135,7 @@ static int get_prepared_stmt_int(struct sqlthdstate *thd,
         }
 
         if (rec->stmt) {
-            stmt_set_vlock_tables(rec->stmt, thd->authState.vTableLocks, thd->authState.numVTableLocks);
+            stmt_set_vlock_tables(rec->stmt, thd->authState.vTableLocks, thd->authState.numVTableLocks, thd->authState.flags);
             thd->authState.numVTableLocks = 0;
             thd->authState.vTableLocks = NULL;
         } else {
@@ -3836,6 +3848,8 @@ static void sqlite_done(struct sqlthdstate *thd, struct sqlclntstate *clnt,
         dohsql_end_distribute(clnt, thd->logger);
         distributed = 1;
     }
+    if (clnt->fdb_push)
+        fdb_push_free(&clnt->fdb_push);
 
     sql_statement_done(thd->sqlthd, thd->logger, clnt, stmt, outrc);
 
@@ -5228,7 +5242,6 @@ void cleanup_clnt(struct sqlclntstate *clnt)
             free(clnt->idxDelete);
         clnt->idxInsert = clnt->idxDelete = NULL;
     }
-    clnt_free_cursor_hints(clnt);
     free_normalized_sql(clnt);
     free_original_normalized_sql(clnt);
     memset(&clnt->work.rec, 0, sizeof(struct sql_state));
@@ -5363,7 +5376,6 @@ void reset_clnt(struct sqlclntstate *clnt, int initial)
     clnt->snapshot = 0;
     clnt->num_retry = 0;
     clnt->early_retry = 0;
-    clnt_reset_cursor_hints(clnt);
 
     clear_session_tbls(clnt);
 
@@ -5974,8 +5986,7 @@ static int execute_sql_query_offload_inner_loop(struct sqlclntstate *clnt,
             if (res.z) {
                 /* now we have the packed sqlite row in Mem->z */
                 rc = fdb_svc_sql_row(clnt->fdb_state.remote_sql_sb, cid, res.z,
-                                     res.n, IX_FNDMORE,
-                                     clnt->osql.rqid == OSQL_RQID_USE_UUID);
+                                     res.n, IX_FNDMORE);
                 if (rc) {
                     /*
                     fprintf(stderr, "%s: failed to send back sql row\n",
@@ -6014,12 +6025,10 @@ static int execute_sql_query_offload_inner_loop(struct sqlclntstate *clnt,
         if (!rc) {
             if (sent == 1) {
                 rc = fdb_svc_sql_row(clnt->fdb_state.remote_sql_sb, cid, res.z,
-                                     res.n, IX_FND,
-                                     clnt->osql.rqid == OSQL_RQID_USE_UUID);
+                                     res.n, IX_FND);
             } else {
                 rc = fdb_svc_sql_row(clnt->fdb_state.remote_sql_sb, cid, res.z,
-                                     res.n, IX_EMPTY,
-                                     clnt->osql.rqid == OSQL_RQID_USE_UUID);
+                                     res.n, IX_EMPTY);
             }
             if (rc) {
                 /*
@@ -6122,8 +6131,7 @@ done:
         const char *tmp = errstat_get_str(&clnt->osql.xerr);
         tmp = tmp ? tmp : "error string not set";
         rc = fdb_svc_sql_row(clnt->fdb_state.remote_sql_sb, cid, (char *)tmp,
-                             strlen(tmp) + 1, errstat_get_rc(&clnt->osql.xerr),
-                             clnt->osql.rqid == OSQL_RQID_USE_UUID);
+                             strlen(tmp) + 1, errstat_get_rc(&clnt->osql.xerr));
         if (rc) {
             logmsg(LOGMSG_ERROR,
                    "%s failed to send back error rc=%d errstr=%s\n", __func__,

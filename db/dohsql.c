@@ -33,7 +33,7 @@ int gbl_dohsql_verbose = 0;
 int gbl_dohsql_max_queued_kb_highwm = 10000;    /* 10 MB */
 int gbl_dohsql_full_queue_poll_msec = 10;       /* 10msec */
 int gbl_dohsql_max_threads = 8; /* do not run more than 8 threads */
-int gbl_dohsql_pool_thr_slack = 1;
+int gbl_dohsql_pool_thr_slack = 24; /* half default sqlengine pool maxthds */
 /* for now we keep this tunning "private */
 static int gbl_dohsql_track_stats = 1;
 static int gbl_dohsql_que_free_highwm = 10;
@@ -226,6 +226,13 @@ static void sqlengine_work_shard(struct thdpool *pool, void *work,
             logmsg(LOGMSG_USER, "XXX: client %p returned error %d\n",
                    clnt->plugin.state, clnt->query_rc);
         handle_child_error(clnt, clnt->query_rc);
+    }
+
+    /* clear the child clnt from this sql thread */
+    if (thd->sqlthd) {
+        Pthread_mutex_lock(&gbl_sql_lock);
+        thd->sqlthd->clnt = NULL;
+        Pthread_mutex_unlock(&gbl_sql_lock);
     }
 
     if (put_curtran(thedb->bdb_env, clnt)) {
@@ -1018,7 +1025,7 @@ static int _shard_connect(struct sqlclntstate *clnt, dohsql_connector_t *conn,
 
     comdb2uuid(conn->clnt->osql.uuid);
     conn->clnt->appsock_id = getarchtid();
-    init_sqlclntstate(conn->clnt, (char *)conn->clnt->osql.uuid, 1);
+    init_sqlclntstate(conn->clnt, (char *)conn->clnt->osql.uuid);
     conn->clnt->origin = clnt->origin;
     conn->clnt->current_user = clnt->current_user;
     conn->clnt->sql = strdup(sql);
@@ -1187,6 +1194,11 @@ int dohsql_distribute(dohsql_node_t *node)
         }
         flags = THDPOOL_FORCE_DISPATCH;
     }
+    /* there is a slack to allow non-coordinator tasks to drain;
+     * it is still possible to fill the sql queue; force the 
+     * worker shards on the queue in any case
+     */
+    flags |= THDPOOL_FORCE_QUEUE;
     clnt->conns = conns;
     /* augment interface */
     _master_clnt_set(clnt);
@@ -1208,8 +1220,12 @@ int dohsql_distribute(dohsql_node_t *node)
                                  clnt->conns->conns[i].clnt, 1,
                                  sr, flags);
             if (rc) {
+                /* this should not fail since we force queue */
+                abort();
+#if 0
                 put_ref(&sr);
                 return SHARD_ERR_GENERIC;
+#endif
             }
         }
     }
@@ -2004,4 +2020,66 @@ struct params_info *dohsql_params_append(struct params_info **pparams,
     params->params[params->nparams++] = *newparam;
     free(newparam);
     return *pparams = params;
+}
+
+int dohsql_clone_params(int nparams, struct param_data * params,
+                        int *pnparams, struct param_data **pparams)
+{
+    struct param_data *pout;
+    int i, tmp;
+
+    /* do not support param arrays yet */
+    for (i=0; i < nparams; i++) {
+        if (params[i].arraylen > 0) {
+            return -1;
+        }
+    }
+
+    pout = calloc(nparams, sizeof(struct param_data));
+    if (!pout)
+        return -1;
+    memcpy(pout, params, nparams * sizeof(struct param_data));
+    for (i=0; i < nparams; i++) {
+        if (params[i].name) {
+            pout[i].name = strdup(params[i].name);
+            if (!pout[i].name) {
+                goto err;
+            }
+        }
+        if ((params[i].type == CLIENT_CSTR||
+             params[i].type == CLIENT_BLOB)  && params[i].len > 0) {
+            pout[i].u.p = malloc(params[i].len);
+            if (!pout[i].u.p)
+                goto err;
+            memcpy(pout[i].u.p, params[i].u.p, params[i].len);
+        }
+    }
+
+    *pparams = pout;
+    *pnparams = nparams;
+    return 0;
+
+err:
+    tmp = nparams;
+    dohsql_free_params(&tmp, &pout, i);
+    return -1;
+}
+
+void dohsql_free_params(int *pnparams, struct param_data **pparams, int index)
+{
+    struct param_data * params = *pparams;
+
+    if (index >= *pnparams)
+        abort();
+
+    while (index--) {
+        free(params[index].name);
+        if ((params[index].type == CLIENT_CSTR ||
+             params[index].type == CLIENT_BLOB)  && params[index].len > 0) {
+            free(params[index].u.p);
+        }
+    }
+    free(params);
+    *pnparams = 0;
+    *pparams = NULL;
 }

@@ -2207,7 +2207,7 @@ void reqlog_end_request(struct reqlogger *logger, int rc, const char *callfunc,
             if (last_long_request_epoch != comdb2_time_epoch()) {
                 last_long_request_epoch = comdb2_time_epoch();
 
-                if (long_request_out != default_out) {
+                if (long_request_out != default_out && long_request_thresh && logger->clnt && !can_consume(logger->clnt)) {
 
                     if (logger->iq && logger->iq->sorese) {
                         char *sqlinfo = osql_sess_info(logger->iq->sorese);
@@ -2500,7 +2500,7 @@ static int release_clientstats(unsigned checksum, int node)
 }
 
 struct rawnodestats *get_raw_node_stats(const char *task, const char *stack,
-                                        char *host, int fd)
+                                        char *host, int fd, int is_ssl)
 {
     struct nodestats *nodestats = NULL;
     unsigned checksum;
@@ -2535,6 +2535,11 @@ struct rawnodestats *get_raw_node_stats(const char *task, const char *stack,
                 __func__, task, stack, node);
         }
     }
+
+    /* The same task name from the same node may switch from plaintext to SSL
+     * on a config change; it may also fall back from SSL to plaintext, on an SSL
+     * error. Always get its latest SSL status from clnt. */
+    nodestats->is_ssl = is_ssl;
 
     if (tmp && namelen >= 1024)
         free(tmp);
@@ -2742,6 +2747,7 @@ struct summary_nodestats *get_nodestats_summary(unsigned *nodes_cnt,
                                   ? strdup(nodestats->stack)
                                   : NULL;
         summaries[ii].ref = nodestats->ref;
+        summaries[ii].is_ssl = nodestats->is_ssl;
 
         summaries[ii].sql_queries = snap.sql_queries;
         summaries[ii].sql_steps = snap.sql_steps;

@@ -594,15 +594,9 @@ int do_dryrun(struct schema_change_type *s)
             goto done;
         }
     }
-    
-    if (db == NULL) {
-        sbuf2printf(s->sb, ">Table %s will be added.\n", s->tablename);
-        goto done;
-    }
-
 
     struct errstat err = {0};
-    newdb = create_new_dbtable(thedb, s->tablename, s->newcsc2, 0, 0, 1, 0, 0,
+    newdb = create_new_dbtable(thedb, s->tablename, s->newcsc2, 0, 0, 1, s->same_schema, 0,
                                &err);
     if (!newdb) {
         sc_client_error(s, "%s", err.errstr);
@@ -610,6 +604,10 @@ int do_dryrun(struct schema_change_type *s)
         goto done;
     }
 
+    if (db == NULL && newdb) {
+        sbuf2printf(s->sb, ">Table %s will be added.\n", s->tablename);
+        goto done;
+    }
     set_schemachange_options(s, db, &scinfo);
     set_sc_flgs(s);
 

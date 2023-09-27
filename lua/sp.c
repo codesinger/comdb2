@@ -73,6 +73,7 @@
 #endif
 #include <event2/util.h> /* missing timeradd on aix */
 #include <carray.h>
+#include <trigger_main.h>
 
 extern int gbl_dump_sql_dispatched; /* dump all sql strings dispatched */
 extern int gbl_return_long_column_names;
@@ -150,6 +151,7 @@ typedef struct {
 
 struct dbconsumer_t {
     DBTYPES_COMMON;
+    int osql_max_trans;
     struct ireq iq;
     struct bdb_queue_cursor last;
     struct bdb_queue_cursor fnd;
@@ -451,21 +453,14 @@ static void luabb_trigger_unregister(Lua L, dbconsumer_t *q)
         }
         Pthread_mutex_unlock(q->lock);
     }
-    int rc;
+    comdb2_sql_tick(); /* See comments in luabb_trigger_register(). */
     int retry = 10;
-    while (retry > 0) {
-        --retry;
-        rc = trigger_unregister_req(&q->info);
-        /* See comments in luabb_trigger_register(). */
-        comdb2_sql_tick();
-        if (rc == CDB2_TRIG_REQ_SUCCESS || rc == CDB2_TRIG_ASSIGNED_OTHER)
-            return;
-        if (L)
-            check_retry_conditions(L, &q->info, 1);
-        sleep(1);
-        /* See comments in luabb_trigger_register(). */
-        comdb2_sql_tick();
-    }
+    do {
+        int rc = trigger_unregister_req(&q->info);
+        if (rc == CDB2_TRIG_REQ_SUCCESS || rc == CDB2_TRIG_ASSIGNED_OTHER) return;
+        if (L) check_retry_conditions(L, &q->info, 1);
+    } while (--retry);
+    comdb2_sql_tick(); /* See comments in luabb_trigger_register(). */
 }
 
 static int stop_waiting(Lua L, dbconsumer_t *q)
@@ -772,14 +767,23 @@ static void dbconsumer_getargs(Lua L, dbconsumer_t *consumer)
             if (strcasecmp(key, "with_tid") == 0) {
                 if (luabb_type(L, -1) == DBTYPES_LBOOLEAN) {
                     consumer->push_tid = lua_toboolean(L, -1);
+                } else {
+                    luaL_error(L, "bad argument for 'with_tid'");
+                    return;
                 }
             } else if (strcasecmp(key, "with_sequence") == 0) {
                 if (luabb_type(L, -1) == DBTYPES_LBOOLEAN) {
                     consumer->push_seq = lua_toboolean(L, -1);
+                } else {
+                    luaL_error(L, "bad argument for 'with_sequence'");
+                    return;
                 }
             } else if (strcasecmp(key, "with_epoch") == 0) {
                 if (luabb_type(L, -1) == DBTYPES_LBOOLEAN) {
                     consumer->push_epoch = lua_toboolean(L, -1);
+                } else {
+                    luaL_error(L, "bad argument for 'with_epoch'");
+                    return;
                 }
             } else if (strcasecmp(key, "register_timeout") == 0) {
                 long long timeoutms = 0;
@@ -837,9 +841,11 @@ static const char * db_begin_int(Lua, int *);
 static const char * db_commit_int(Lua, int *);
 static const char * db_rollback_int(Lua, int *);
 
-static void reset_consumer_cursor(struct dbconsumer_t *q)
+static void reset_consumer_cursor(SP sp)
 {
+    struct dbconsumer_t *q = sp->consumer;
     if (!q) return;
+    sp->clnt->osql_max_trans = q->osql_max_trans;
     q->genid = 0;
     memset(&q->fnd, 0, sizeof(q->fnd));
     memset(&q->last, 0, sizeof(q->last));
@@ -897,7 +903,7 @@ static int dbconsumer_consume(Lua L)
                        __func__, clnt->intrans, err, rc);
         }
     }
-    reset_consumer_cursor(q);
+    reset_consumer_cursor(sp);
     return push_and_return(L, rc);
 }
 
@@ -923,9 +929,14 @@ static int dbconsumer_next(Lua L)
         clnt->intrans = 1;
     }
     Q4SP(qname, q->info.spname);
+    ++clnt->osql_max_trans;
     rc = osql_delrec_qdb(clnt, qname, q->genid);
     if (rc) {
-        return luaL_error(L, "%s osql_delrec_qdb rc:%d", __func__, rc);
+        if (errstat_get_rc(&clnt->osql.xerr)) {
+            return luaL_error(L, "%s osql_delrec_qdb rc:%d err:%s", __func__, rc, errstat_get_str(&clnt->osql.xerr));
+        } else  {
+            return luaL_error(L, "%s osql_delrec_qdb rc:%d", __func__, rc);
+        }
     }
     q->last = q->fnd;
     return push_and_return(L, 0);
@@ -961,6 +972,8 @@ static int dbconsumer_free(Lua L)
     ctrace("%s:%s %016" PRIx64 " unregister req\n", q->type, q->info.spname, q->info.trigger_cookie);
     luabb_trigger_unregister(L, q);
     ctrace("%s:%s %016" PRIx64 " unregister done\n", q->type, q->info.spname, q->info.trigger_cookie);
+    SP sp = getsp(L);
+    sp->clnt->osql_max_trans = q->osql_max_trans;
     return 0;
 }
 
@@ -1686,45 +1699,6 @@ static char *no_such_procedure(const char *name, struct spversion_t *spversion)
     return ret;
 }
 
-const char comdb2_trigger_main[] =
-"                                                                              \n\
-local function comdb2_trigger_main()                                           \n\
-    local sp = db:spname()                                                     \n\
-    db:ctrace('trigger:'..sp..' send register')                                \n\
-    local c = db:trigger({register_timeout = 1000})                            \n\
-    if c == nil then                                                           \n\
-        db:ctrace('trigger:'..sp..' register failed')                          \n\
-        return                                                                 \n\
-    end                                                                        \n\
-    db:ctrace('trigger:'..sp..' assigned; now running')                        \n\
-    local e = c:get()                                                          \n\
-    while e do                                                                 \n\
-        db:trigger_version_check()                                             \n\
-        db:trigger_begin()                                                     \n\
-        local rc = main(e)                                                     \n\
-        if rc ~= 0 then                                                        \n\
-            db:ctrace('trigger:'..sp..' main rc:'..rc..' err:'..db:error())    \n\
-            db:trigger_rollback()                                              \n\
-            break                                                              \n\
-        end                                                                    \n\
-        rc = c:consume()                                                       \n\
-        if rc ~= 0 then                                                        \n\
-            db:ctrace('trigger:'..sp..' consume rc:'..rc..' err:'..db:error()) \n\
-            db:trigger_rollback()                                              \n\
-            break                                                              \n\
-        end                                                                    \n\
-        rc = db:trigger_commit()                                               \n\
-        if rc ~= 0 then                                                        \n\
-            db:ctrace('trigger:'..sp..' commit rc:'..rc..' err:'..db:error())  \n\
-            break                                                              \n\
-        end                                                                    \n\
-        e = c:get()                                                            \n\
-    end                                                                        \n\
-    if e == nil then                                                           \n\
-        db:ctrace('trigger'..sp..' nil event')                                 \n\
-    end                                                                        \n\
-end";
-
 static char bootstrap_src[] =
 "                                                           \n\
 local function comdb2_main()                                \n\
@@ -1779,8 +1753,8 @@ static char *load_user_src(char *spname, struct spversion_t *spversion,
         size = strlen(src) + 1;
     }
     if (bootstrap == 2) {
-        char *sp_src = malloc(size + sizeof(comdb2_trigger_main) + sizeof(bootstrap_src));
-        sprintf(sp_src, "%s%s%s", src, comdb2_trigger_main, bootstrap_src);
+        char *sp_src = malloc(size + 1 + sizeof(trigger_main) + sizeof(bootstrap_src));
+        sprintf(sp_src, "%s\n%s%s", src, trigger_main, bootstrap_src);
         free(src);
         src = sp_src;
     } else if (bootstrap) {
@@ -2726,7 +2700,7 @@ static int db_commit(Lua L)
 {
     luaL_checkudata(L, 1, dbtypes.db);
     SP sp = getsp(L);
-    reset_consumer_cursor(sp->consumer);
+    reset_consumer_cursor(sp);
     if (sp->in_parent_trans) { // explicit commit w/o begin
         return luaL_error(L, no_transaction());
     }
@@ -2740,7 +2714,7 @@ static int db_rollback(Lua L)
 {
     luaL_checkudata(L, 1, dbtypes.db);
     SP sp = getsp(L);
-    reset_consumer_cursor(sp->consumer);
+    reset_consumer_cursor(sp);
     if (sp->in_parent_trans) { // explicit commit w/o begin
         return luaL_error(L, no_transaction());
     }
@@ -3134,6 +3108,7 @@ static void drop_temp_tables(SP sp)
 // SP ready to run again
 static void reset_sp(SP sp)
 {
+    if (!sp) return;
     if (sp->lua) {
         lua_gc(sp->lua, LUA_GCCOLLECT, 0);
         drop_temp_tables(sp);
@@ -4220,12 +4195,10 @@ static int db_emiterror(lua_State *lua)
 static int db_column_name(Lua L)
 {
     luaL_checkudata(L, 1, dbtypes.db);
-    luaL_checkstring(L, 2);
-    luaL_checknumber(L, 3);
+    char *name = strdup(luaL_checkstring(L, 2));
+    int index = luaL_checknumber(L, 3);
     SP sp = getsp(L);
     SP parent = sp->parent;
-    char *name = strdup(luabb_tostring(L, 2));
-    int index = lua_tonumber(L, 3);
     if (name == NULL || index < 1) {
         free(name);
         return luaL_error(L, "bad arguments to 'column_name'");
@@ -4258,12 +4231,10 @@ static int db_column_name(Lua L)
 static int db_column_type(Lua L)
 {
     luaL_checkudata(L, 1, dbtypes.db);
-    luaL_checkstring(L, 2);
-    luaL_checknumber(L, 3);
+    char *name = strdup(luaL_checkstring(L, 2));
+    int index = luaL_checknumber(L, 3);
     SP sp = getsp(L);
     SP parent = sp->parent;
-    char *name = strdup(luabb_tostring(L, 2));
-    int index = lua_tonumber(L, 3);
     if (name == NULL || index < 1) {
         free(name);
         return luaL_error(L, "bad arguments to 'column_type'");
@@ -4322,12 +4293,11 @@ static int db_column_type(Lua L)
 static int db_num_columns(Lua L)
 {
     luaL_checkudata(L, 1, dbtypes.db);
-    luaL_checknumber(L, 2);
+    int num_cols = luaL_checknumber(L, 2);
     SP sp = getsp(L);
     SP parent = sp->parent;
     struct sqlclntstate *parent_clnt = parent->clnt;
     int num = override_count(parent_clnt);
-    int num_cols = lua_tonumber(L, 2);
     if (num && num != num_cols) {
         return luaL_error(
             L, "attempt to change number of columns for typed-statement");
@@ -4803,6 +4773,7 @@ static int register_queue_with_berkdb_and_master(Lua L, const char *type)
     sp->consumer = consumer;
     consumer->type = type;
     consumer->emit_timeoutms = 60000; /* emit times-out after 1 min */
+    consumer->osql_max_trans = clnt->osql_max_trans;
 
     if (lua_gettop(L) == 2) {
         lua_insert(L, 1); /* move dbconsumer to bottom of stack */
@@ -5018,6 +4989,7 @@ static const luaL_Reg consumer_funcs[] = {
     {"get_event_epoch", db_get_event_epoch},
     {"get_event_sequence", db_get_event_sequence},
     {"get_event_tid", db_get_event_tid},
+    {"spname", db_spname},
     {NULL, NULL}
 };
 
@@ -6600,6 +6572,7 @@ static uint8_t *push_trigger_field(Lua lua, char *oldnew, char *name,
         u.in.type = INTV_DS_TYPE;
         u.in.sign = ntohl(ds->sign);
         u.in.u.ds.days = ntohl(ds->days);
+        u.in.u.ds.hours = ntohl(ds->hours);
         u.in.u.ds.mins = ntohl(ds->mins);
         u.in.u.ds.sec = ntohl(ds->sec);
         u.in.u.ds.frac = ntohl(ds->msec);
@@ -6613,6 +6586,7 @@ static uint8_t *push_trigger_field(Lua lua, char *oldnew, char *name,
         u.in.type = INTV_DSUS_TYPE;
         u.in.sign = ntohl(dsus->sign);
         u.in.u.ds.days = ntohl(dsus->days);
+        u.in.u.ds.hours = ntohl(dsus->hours);
         u.in.u.ds.mins = ntohl(dsus->mins);
         u.in.u.ds.sec = ntohl(dsus->sec);
         u.in.u.ds.frac = ntohl(dsus->usec);
@@ -7364,7 +7338,9 @@ int exec_procedure(struct sqlthdstate *thd, struct sqlclntstate *clnt, char **er
     clnt->ready_for_heartbeats = 1;
     clnt->recover_ddlk = recover_ddlk_sp;
     clnt->recover_ddlk_fail = recover_ddlk_fail_sp;
+    int osql_max_trans = clnt->osql_max_trans;
     int rc = exec_procedure_int(thd, clnt, err, 0);
+    clnt->osql_max_trans = osql_max_trans;
     clnt->recover_ddlk = NULL;
     clnt->recover_ddlk_fail = NULL;
     if (clnt->sp) {

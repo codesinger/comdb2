@@ -966,7 +966,9 @@ int sqlite3_unpacked_to_packed(Mem *mems, int nmems, char **ret_rec,
         total_data_sz += sqlite3VdbeSerialTypeLen(type);
         total_header_sz += sqlite3VarintLen(type);
     }
-    total_header_sz += sqlite3VarintLen(total_header_sz);
+    // adding header length to total_header_sz may change header length of total_header_sz, so calculate sqlite3VarintLen() twice
+    int header_length = sqlite3VarintLen(total_header_sz);
+    total_header_sz += sqlite3VarintLen(total_header_sz + header_length);
 
     /* create the sqlite row */
     rec = (char *)calloc(1, total_header_sz + total_data_sz);
@@ -1003,6 +1005,7 @@ int sqlite3_unpacked_to_packed(Mem *mems, int nmems, char **ret_rec,
     *ret_rec_len = total_header_sz + total_data_sz;
 
     if (remsz != 0) {
+        logmsg(LOGMSG_ERROR, "%s: remsz %d != 0\n", __func__, remsz);
         abort();
     }
 
@@ -7619,6 +7622,7 @@ int gbl_assert_systable_locks = 1;
 #else
 int gbl_assert_systable_locks = 0;
 #endif
+extern pthread_rwlock_t views_lk;
 
 static int sqlite3LockStmtTables_int(sqlite3_stmt *pStmt, int after_recovery)
 {
@@ -7641,6 +7645,11 @@ static int sqlite3LockStmtTables_int(sqlite3_stmt *pStmt, int after_recovery)
 
     if (NULL == clnt->dbtran.cursor_tran) {
         return 0;
+    }
+
+    if ((p->vTableFlags & PREPARE_ACQUIRE_VIEWSLK) && !clnt->dbtran.views_lk_held) {
+        Pthread_rwlock_rdlock(&views_lk);
+        clnt->dbtran.views_lk_held = 1;
     }
 
     for (int i = 0; i < p->numVTableLocks; i++) {
@@ -8017,6 +8026,7 @@ sqlite3BtreeCursor_remote(Btree *pBt,      /* The btree */
                           BtCursor *cur,   /* Write new cursor here */
                           struct sql_thread *thd)
 {
+    extern int gbl_ssl_allow_remsql;
     struct sqlclntstate *clnt = thd->clnt;
     fdb_tran_t *trans;
     fdb_t *fdb;
@@ -8067,7 +8077,7 @@ sqlite3BtreeCursor_remote(Btree *pBt,      /* The btree */
     if (trans)
         Pthread_mutex_lock(&clnt->dtran_mtx);
 
-    int usessl = clnt->plugin.has_ssl(clnt);
+    int usessl = clnt->plugin.has_ssl(clnt) && gbl_ssl_allow_remsql;
     cur->fdbc =
         fdb_cursor_open(clnt, cur, cur->rootpage, trans, &cur->ixnum, usessl);
     if (!cur->fdbc) {
@@ -8077,24 +8087,14 @@ sqlite3BtreeCursor_remote(Btree *pBt,      /* The btree */
     }
 
     if (gbl_fdb_track) {
-        if (cur->fdbc->isuuid(cur)) {
-            uuidstr_t cus, tus;
-            unsigned char *pStr = (unsigned char *)cur->fdbc->id(cur);
-            logmsg(LOGMSG_USER,
-                   "%s Created cursor cid=%s with tid=%s rootp=%d "
-                   "db:tbl=\"%s:%s\"\n",
-                   __func__, (pStr) ? comdb2uuidstr(pStr, cus) : "UNK",
-                   comdb2uuidstr(tid, tus), iTable, pBt->zFilename,
-                   cur->fdbc->name(cur));
-        } else {
-            uuidstr_t tus;
-            unsigned long long *pLng = (unsigned long long *)cur->fdbc->id(cur);
-            logmsg(LOGMSG_USER,
-                   "%s Created cursor cid=%llx with tid=%s rootp=%d "
-                   "db:tbl=\"%s:%s\"\n",
-                   __func__, (pLng) ? *pLng : -1LL, comdb2uuidstr(tid, tus),
-                   iTable, pBt->zFilename, cur->fdbc->name(cur));
-        }
+        uuidstr_t cus, tus;
+        unsigned char *pStr = (unsigned char *)cur->fdbc->id(cur);
+        logmsg(LOGMSG_USER,
+               "%s Created cursor cid=%s with tid=%s rootp=%d "
+               "db:tbl=\"%s:%s\"\n",
+               __func__, (pStr) ? comdb2uuidstr(pStr, cus) : "UNK",
+               comdb2uuidstr(tid, tus), iTable, pBt->zFilename,
+               cur->fdbc->name(cur));
     }
 
     if (trans)
@@ -8603,11 +8603,17 @@ static int chunk_transaction(BtCursor *pCur, struct sqlclntstate *clnt,
     int need_ssl = 0;
 
     uint8_t **pIdxInsert = NULL, **pIdxDelete = NULL;
+    unsigned long long ins_keys_saved = 0ULL;
+    unsigned long long del_keys_saved = 0ULL;
 
     if (clnt->dbtran.crtchunksize >= clnt->dbtran.maxchunksize) {
 
-        /* Latch expressional index keys. We do not want them to be
-           cleaned up by the micro transaction we are about to commit. */
+        /* Latch partial index/index on expression related data. We do not want
+           them to be cleaned up by the micro transaction we are about to commit. */
+        if (gbl_partial_indexes && pCur->db && pCur->db->ix_partial) {
+            ins_keys_saved = clnt->ins_keys;
+            del_keys_saved = clnt->del_keys;
+        }
         if (gbl_expressions_indexes && pCur->db && pCur->db->ix_expr) {
             pIdxInsert = clnt->idxInsert;
             pIdxDelete = clnt->idxDelete;
@@ -8728,7 +8734,12 @@ static int chunk_transaction(BtCursor *pCur, struct sqlclntstate *clnt,
         clnt->dbtran.crtchunksize++;
     }
 done:
-    /* Restore the expressional index keys onto clnt for the next OP_Insert/OP_Delete. */
+    /* Restore the partial index/index on expression data onto clnt for the next
+       OP_Insert/OP_Delete. */
+    if (ins_keys_saved != 0 || del_keys_saved != 0) {
+        clnt->ins_keys = ins_keys_saved;
+        clnt->del_keys = del_keys_saved;
+    }
     if (pIdxInsert != NULL || pIdxDelete != NULL) {
         clnt->idxInsert = pIdxInsert;
         clnt->idxDelete = pIdxDelete;
@@ -9685,6 +9696,12 @@ int put_curtran_flags(bdb_state_type *bdb_state, struct sqlclntstate *clnt,
 
     rc = bdb_put_cursortran(bdb_state, clnt->dbtran.cursor_tran, curtran_flags,
                             &bdberr);
+
+    if (clnt->dbtran.views_lk_held) {
+        Pthread_rwlock_unlock(&views_lk);
+        clnt->dbtran.views_lk_held = 0;
+    }
+
     if (rc) {
         logmsg(LOGMSG_DEBUG, "%s: %p rc %d bdberror %d\n", __func__, (void *)pthread_self(), rc, bdberr);
         ctrace("%s: rc %d bdberror %d\n", __func__, rc, bdberr);
@@ -11304,8 +11321,6 @@ sbuf:
         return NULL;
     }
 
-    logmsg(LOGMSG_INFO, "%s:%d connected to remote fd: %d\n", __func__, __LINE__, sbuf2fileno(sb));
-
     sbuf2settimeout(sb, IOTIMEOUTMS, IOTIMEOUTMS);
 
     return sb;
@@ -11434,77 +11449,6 @@ void sqlite3BtreeCursorHint(BtCursor *pCur, int eHintType, ...)
     }
     }
     va_end(ap);
-}
-
-int comdb2_sqlitecursor_is_hinted(int id)
-{
-    struct sql_thread *thd = pthread_getspecific(query_info_key);
-    struct sqlclntstate *clnt = thd->clnt;
-    int i;
-
-    if (!clnt->hinted_cursors || !clnt->hinted_cursors_used)
-        return 0;
-
-    for (i = 0; i < clnt->hinted_cursors_used; i++) {
-        if (clnt->hinted_cursors[i] == id) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-int comdb2_sqlitecursor_set_hinted(int id)
-{
-    struct sql_thread *thd = pthread_getspecific(query_info_key);
-    struct sqlclntstate *clnt = thd->clnt;
-
-    if (!clnt->hinted_cursors) {
-        clnt->hinted_cursors = (int *)calloc(16, sizeof(int));
-        if (!clnt->hinted_cursors) {
-            logmsg(LOGMSG_ERROR, "%s: malloc fail\n", __func__);
-            return -1;
-        }
-        clnt->hinted_cursors_alloc = 16;
-        clnt->hinted_cursors_used = 0;
-    }
-
-    if (clnt->hinted_cursors_alloc < clnt->hinted_cursors_used + 1) {
-        clnt->hinted_cursors = (int *)realloc(
-            clnt->hinted_cursors, clnt->hinted_cursors_alloc * 2 * sizeof(int));
-        if (!clnt->hinted_cursors) {
-            logmsg(LOGMSG_ERROR, "%s: malloc fail\n", __func__);
-            return -1;
-        }
-        clnt->hinted_cursors_alloc *= 2;
-    }
-
-    clnt->hinted_cursors[clnt->hinted_cursors_used] = id;
-    clnt->hinted_cursors_used++;
-
-    return 0;
-}
-
-void clnt_reset_cursor_hints(struct sqlclntstate *clnt)
-{
-    if (clnt->hinted_cursors) {
-        if (clnt->hinted_cursors_alloc > 256) {
-            clnt->hinted_cursors = realloc(clnt->hinted_cursors, 256 * sizeof(int));
-            clnt->hinted_cursors_alloc = 256;
-        }
-        bzero(clnt->hinted_cursors, clnt->hinted_cursors_alloc);
-        clnt->hinted_cursors_used = 0;
-    } else {
-        clnt->hinted_cursors_alloc = 0;
-        clnt->hinted_cursors_used = 0;
-    }
-}
-
-void clnt_free_cursor_hints(struct sqlclntstate *clnt)
-{
-    if (clnt->hinted_cursors) {
-        free(clnt->hinted_cursors);
-        clnt->hinted_cursors = NULL;
-    }
 }
 
 int fdb_packedsqlite_extract_genid(char *key, int *outlen, char *outbuf)
@@ -13194,4 +13138,3 @@ int comdb2_is_field_indexable(const char *table_name, int fld_idx) {
     }
     return 1;
 }
-

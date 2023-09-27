@@ -22,7 +22,6 @@
 
 extern int comdb2genidcontainstime(void);
 extern char* fdb_table_name(int iTable);
-extern const char* comdb2_get_sql(void);
 #endif /* defined(SQLITE_BUILDING_FOR_COMDB2) */
 
 /* Forward declarations */
@@ -6450,16 +6449,7 @@ default_prec:
     static int last;
 
     if( last != pExpr->op ){
-      const char *sql;
-
-      sql = comdb2_get_sql();
-
-      /* we only need one trace */
-      logmsg(LOGMSG_ERROR, "Unsupported expression for remote cursors\n");
-      logmsg(LOGMSG_ERROR, "%s; pExpr->op=%d\n", __func__, pExpr->op);
-      logmsg(LOGMSG_ERROR, "query:'%s'\n", (sql)?sql:"unavailable");
-
-      last = pExpr->op;
+      v->fdb_warn_this_op = last = pExpr->op;
     }
   }
   if (op == TK_AGG_FUNCTION) {
