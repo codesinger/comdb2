@@ -181,111 +181,6 @@ void set_constraint_mod(int start, int op, int type)
     }
 }
 
-int dyns_get_period(int period, int *start, int *end)
-{
-    if (macc_globals->nperiods <= 0) return 0;
-    if (period >= PERIOD_MAX) return -1;
-    if (!macc_globals->periods[period].enable) return 0;
-    *start = macc_globals->periods[period].start;
-    *end = macc_globals->periods[period].end;
-    return 0;
-}
-
-void start_periods_list(void)
-{
-    int i;
-    for (i = 0; i < PERIOD_MAX; i++) {
-        macc_globals->periods[i].enable = 0;
-        macc_globals->periods[i].start = -1;
-        macc_globals->periods[i].end = -1;
-    }
-}
-
-int getsymbol(char *tabletag, char *nm, int *tblidx);
-void add_period(char *name, char *start, char *end)
-{
-    int period_type = PERIOD_MAX;
-    int i, tidx = 0;
-    char *tag;
-    if (strcasecmp(name, "SYSTEM") == 0)
-        period_type = PERIOD_SYSTEM;
-    else if (strcasecmp(name, "BUSINESS") == 0)
-        period_type = PERIOD_BUSINESS;
-    if (period_type < PERIOD_MAX) {
-        if (macc_globals->periods[period_type].enable) {
-            csc2_error("Error at line %3d: DUPLICATE PERIOD: %s.\n",
-                       current_line, name);
-            csc2_syntax_error("Error at line %3d: DUPLICATE PERIOD: %s.",
-                              current_line, name);
-            any_errors++;
-            return;
-        }
-
-        strlower(start, strlen(start));
-        tag = ONDISKTAG;
-        i = getsymbol(tag, start, &tidx);
-        if (i == -1) {
-            tag = (macc_globals->ntables > 1) ? ONDISKTAG : DEFAULTTAG;
-            i = getsymbol(tag, start, &tidx);
-        }
-        if (i == -1) {
-            csc2_error("Error at line %3d: SYMBOL NOT FOUND: %s.\n",
-                       current_line, start);
-            csc2_syntax_error("Error at line %3d: SYMBOL NOT FOUND: %s.",
-                              current_line, start);
-            csc2_error("IF IN MULTI-TABLE MODE MAKE SURE %s TAG IS DEFINED\n",
-                       ONDISKTAG);
-            any_errors++;
-            return;
-        } else if (macc_globals->tables[tidx].sym[i].type != T_DATETIMEUS) {
-            csc2_error("Error at line %3d: BAD PERIOD START: %s\n",
-                       current_line, start);
-            csc2_syntax_error("Error at line %3d: BAD PERIOD START: %s",
-                              current_line, start);
-            any_errors++;
-            return;
-        } else {
-            macc_globals->periods[period_type].start = i;
-        }
-
-        strlower(end, strlen(end));
-        tag = ONDISKTAG;
-        i = getsymbol(tag, end, &tidx);
-        if (i == -1) {
-            tag = (macc_globals->ntables > 1) ? ONDISKTAG : DEFAULTTAG;
-            i = getsymbol(tag, end, &tidx);
-        }
-        if (i == -1) {
-            csc2_error("Error at line %3d: SYMBOL NOT FOUND: %s.\n",
-                       current_line, end);
-            csc2_syntax_error("Error at line %3d: SYMBOL NOT FOUND: %s.",
-                              current_line, end);
-            csc2_error("IF IN MULTI-TABLE MODE MAKE SURE %s TAG IS DEFINED\n",
-                       ONDISKTAG);
-            any_errors++;
-            return;
-        } else if (macc_globals->tables[tidx].sym[i].type != T_DATETIMEUS) {
-            csc2_error("Error at line %3d: BAD PERIOD END: %s\n", current_line,
-                       end);
-            csc2_syntax_error("Error at line %3d: BAD PERIOD END: %s",
-                              current_line, end);
-            any_errors++;
-            return;
-        } else {
-            macc_globals->periods[period_type].end = i;
-        }
-        macc_globals->periods[period_type].enable = 1;
-        macc_globals->nperiods++;
-    } else {
-        csc2_error("Error at line %3d: UNKNOWN PERIOD: %s.\n", current_line,
-                   name);
-        csc2_syntax_error("Error at line %3d: UNKNOWN PERIOD: %s.",
-                          current_line, name);
-        any_errors++;
-        return;
-    }
-}
-
 void set_constraint_name(char *name, enum ct_type type)
 {
     int i;
@@ -395,7 +290,7 @@ char *eos(char *line) /* RETURNS END OF STRING */
     return line + strlen(line);
 }
 
-static void strupper(char *c)				/* STRING TO UPPER CASE */
+static void strupper(char *c)       /* STRING TO UPPER CASE */
 {
     while (*c) {
         *c=toupper(*c);
@@ -403,7 +298,7 @@ static void strupper(char *c)				/* STRING TO UPPER CASE */
     }
 }
 
-static void strlower(char *c)				/* STRING TO LOWER CASE */
+static void strlower(char *c)       /* STRING TO LOWER CASE */
 {
     while (*c) {
         *c=tolower(*c);
@@ -436,6 +331,111 @@ static char *strcpyupper(char *c) /* STRING TO UPPER CASE */
         tmp++;
     }
     return c1;
+}
+
+int dyns_get_period(int period, int *start, int *end)
+{
+    if (macc_globals->nperiods <= 0) return 0;
+    if (period >= PERIOD_MAX) return -1;
+    if (!macc_globals->periods[period].enable) return 0;
+    *start = macc_globals->periods[period].start;
+    *end = macc_globals->periods[period].end;
+    return 0;
+}
+
+void start_periods_list(void)
+{
+    int i;
+    for (i = 0; i < PERIOD_MAX; i++) {
+        macc_globals->periods[i].enable = 0;
+        macc_globals->periods[i].start = -1;
+        macc_globals->periods[i].end = -1;
+    }
+}
+
+int getsymbol(char *tabletag, char *nm, int *tblidx);
+void add_period(char *name, char *start, char *end)
+{
+    int period_type = PERIOD_MAX;
+    int i, tidx = 0;
+    char *tag;
+    if (strcasecmp(name, "SYSTEM") == 0)
+        period_type = PERIOD_SYSTEM;
+    else if (strcasecmp(name, "BUSINESS") == 0)
+        period_type = PERIOD_BUSINESS;
+    if (period_type < PERIOD_MAX) {
+        if (macc_globals->periods[period_type].enable) {
+            csc2_error("Error at line %3d: DUPLICATE PERIOD: %s.\n",
+                       current_line, name);
+            csc2_syntax_error("Error at line %3d: DUPLICATE PERIOD: %s.",
+                              current_line, name);
+            any_errors++;
+            return;
+        }
+
+        strlower(start);
+        tag = ONDISKTAG;
+        i = getsymbol(tag, start, &tidx);
+        if (i == -1) {
+            tag = (macc_globals->ntables > 1) ? ONDISKTAG : DEFAULTTAG;
+            i = getsymbol(tag, start, &tidx);
+        }
+        if (i == -1) {
+            csc2_error("Error at line %3d: SYMBOL NOT FOUND: %s.\n",
+                       current_line, start);
+            csc2_syntax_error("Error at line %3d: SYMBOL NOT FOUND: %s.",
+                              current_line, start);
+            csc2_error("IF IN MULTI-TABLE MODE MAKE SURE %s TAG IS DEFINED\n",
+                       ONDISKTAG);
+            any_errors++;
+            return;
+        } else if (macc_globals->tables[tidx].sym[i].type != T_DATETIMEUS) {
+            csc2_error("Error at line %3d: BAD PERIOD START: %s\n",
+                       current_line, start);
+            csc2_syntax_error("Error at line %3d: BAD PERIOD START: %s",
+                              current_line, start);
+            any_errors++;
+            return;
+        } else {
+            macc_globals->periods[period_type].start = i;
+        }
+
+        strlower(end);
+        tag = ONDISKTAG;
+        i = getsymbol(tag, end, &tidx);
+        if (i == -1) {
+            tag = (macc_globals->ntables > 1) ? ONDISKTAG : DEFAULTTAG;
+            i = getsymbol(tag, end, &tidx);
+        }
+        if (i == -1) {
+            csc2_error("Error at line %3d: SYMBOL NOT FOUND: %s.\n",
+                       current_line, end);
+            csc2_syntax_error("Error at line %3d: SYMBOL NOT FOUND: %s.",
+                              current_line, end);
+            csc2_error("IF IN MULTI-TABLE MODE MAKE SURE %s TAG IS DEFINED\n",
+                       ONDISKTAG);
+            any_errors++;
+            return;
+        } else if (macc_globals->tables[tidx].sym[i].type != T_DATETIMEUS) {
+            csc2_error("Error at line %3d: BAD PERIOD END: %s\n", current_line,
+                       end);
+            csc2_syntax_error("Error at line %3d: BAD PERIOD END: %s",
+                              current_line, end);
+            any_errors++;
+            return;
+        } else {
+            macc_globals->periods[period_type].end = i;
+        }
+        macc_globals->periods[period_type].enable = 1;
+        macc_globals->nperiods++;
+    } else {
+        csc2_error("Error at line %3d: UNKNOWN PERIOD: %s.\n", current_line,
+                   name);
+        csc2_syntax_error("Error at line %3d: UNKNOWN PERIOD: %s.",
+                          current_line, name);
+        any_errors++;
+        return;
+    }
 }
 
 int field_type(int macctype, int use_server_types)
